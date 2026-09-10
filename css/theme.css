@@ -1,0 +1,101 @@
+/* ============================================================
+   LIFE PROGRESS — DESIGN TOKENS
+   Single source of truth for color, type, space, radius, motion.
+   ============================================================ */
+
+:root {
+  /* Type scale */
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+  --fs-2xl: 28px;
+  --fs-3xl: 34px;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  /* Radius */
+  --r-s: 10px;
+  --r-m: 16px;
+  --r-l: 22px;
+  --r-xl: 28px;
+
+  /* Motion */
+  --d-fast: 120ms;
+  --d-base: 240ms;
+  --d-slow: 420ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Depth */
+  --z-tabbar: 40;
+  --z-modal: 60;
+  --z-toast: 70;
+  --z-onboarding: 80;
+}
+
+/* ------- Dark theme (default) ------- */
+[data-theme="dark"] {
+  --bg: #0a0e14;
+  --bg-soft: #0d1320;
+  --surface: #111826;
+  --surface-2: #1a2332;
+  --surface-3: #233046;
+  --border: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.28);
+  --text: #edf2f7;
+  --text-2: #94a3b8;
+  --text-3: #5b6b7d;
+  --accent: #2dd4bf;
+  --accent-strong: #14b8a6;
+  --on-accent: #04211d;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  --backdrop: rgba(3, 6, 11, 0.72);
+  --hero-grad: radial-gradient(120% 90% at 15% 0%, #123b46 0%, #0d2331 45%, #0a0e14 100%);
+  --overlay-grad: linear-gradient(180deg, rgba(10, 14, 20, 0.2) 0%, rgba(10, 14, 20, 0.55) 55%, rgba(10, 14, 20, 0.92) 100%);
+  --glass: rgba(17, 24, 38, 0.72);
+  color-scheme: dark;
+}
+
+/* ------- Light theme ------- */
+[data-theme="light"] {
+  --bg: #f4f6f9;
+  --bg-soft: #eef1f5;
+  --surface: #ffffff;
+  --surface-2: #eef2f6;
+  --surface-3: #e2e8f0;
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #94a3b8;
+  --accent: #0d9488;
+  --accent-strong: #0f766e;
+  --on-accent: #ffffff;
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.07);
+  --shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --backdrop: rgba(15, 23, 42, 0.42);
+  --hero-grad: radial-gradient(120% 90% at 15% 0%, #c7f3ec 0%, #dbe7f5 45%, #f4f6f9 100%);
+  --overlay-grad: linear-gradient(180deg, rgba(244, 246, 249, 0.15) 0%, rgba(244, 246, 249, 0.55) 60%, rgba(244, 246, 249, 0.95) 100%);
+  --glass: rgba(255, 255, 255, 0.8);
+  color-scheme: light;
+}

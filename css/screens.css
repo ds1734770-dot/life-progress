@@ -1,0 +1,373 @@
+/* ============================================================
+   SCREENS — layout for each dedicated page
+   ============================================================ */
+
+/* ------- Dashboard ------- */
+.dash-hero {
+  position: relative;
+  margin: calc(-1 * var(--sp-5)) calc(-1 * var(--sp-5)) 0;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-5)) var(--sp-5) var(--sp-6);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  overflow: hidden;
+  background: var(--hero-grad);
+  min-height: 208px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.dash-hero.has-image {
+  background-size: cover;
+  background-position: center;
+}
+.dash-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-grad);
+  pointer-events: none;
+}
+.dash-hero-top {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.dash-hero-greeting {
+  flex: 1;
+  min-width: 0;
+}
+.dash-hello {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.dash-name {
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.dash-quote {
+  position: relative;
+  z-index: 1;
+  margin-top: var(--sp-4);
+}
+.dash-quote p {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-style: italic;
+  color: var(--text);
+  line-height: 1.5;
+  max-width: 90%;
+}
+.dash-quote .dash-quote-by {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+  margin-top: 4px;
+  font-style: normal;
+}
+
+.dash-progress-card {
+  margin-top: var(--sp-5);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-5);
+}
+.dash-progress-text .dash-progress-label {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-weight: 600;
+}
+.dash-progress-text .dash-progress-sub {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.dash-hero-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  align-items: center;
+}
+
+/* Water big ring (Water page) */
+.water-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-6);
+  margin-top: var(--sp-5);
+}
+.water-numbers .water-amount {
+  font-size: var(--fs-3xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.water-numbers .water-target {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+/* Journal writing screen */
+.journal-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - 140px);
+  padding-top: var(--sp-4);
+}
+.journal-editor .editor-title {
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.journal-editor .editor-title:focus {
+  outline: none;
+  background: transparent;
+}
+.journal-editor .editor-body {
+  flex: 1;
+  font-size: var(--fs-lg);
+  line-height: 1.7;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-top: var(--sp-4);
+}
+.journal-editor .editor-body:focus {
+  outline: none;
+  background: transparent;
+}
+.editor-prompt {
+  color: var(--text-3);
+  font-size: var(--fs-lg);
+  margin-top: var(--sp-4);
+  pointer-events: none;
+}
+
+/* Mood picker */
+.mood-row {
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.mood-row::-webkit-scrollbar {
+  display: none;
+}
+.mood {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+  transition: transform var(--d-fast) var(--spring), background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.mood .mood-emoji {
+  font-size: var(--fs-xl);
+}
+.mood.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+  color: var(--text);
+  transform: scale(1.05);
+}
+
+/* Journal timeline */
+.journal-day {
+  margin-top: var(--sp-5);
+}
+.journal-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.journal-day-date {
+  font-weight: 800;
+  font-size: var(--fs-md);
+}
+.journal-day-count {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+/* Onboarding */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-onboarding);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn var(--d-base) var(--ease);
+}
+.ob-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--sp-6);
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+}
+.ob-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  margin-bottom: var(--sp-6);
+  animation: popIn var(--d-slow) var(--spring);
+}
+.ob-title {
+  font-size: var(--fs-3xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.ob-sub {
+  font-size: var(--fs-lg);
+  color: var(--text-2);
+  margin-top: var(--sp-3);
+  line-height: 1.6;
+}
+.ob-progress {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding-bottom: calc(var(--sp-6) + env(safe-area-inset-bottom, 0px));
+}
+.ob-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  transition: width var(--d-base) var(--spring), background var(--d-base) var(--ease);
+}
+.ob-dot.active {
+  width: 24px;
+  background: var(--accent);
+}
+
+/* Water amount pulse on add */
+@keyframes amountPulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); color: var(--accent); }
+  100% { transform: scale(1); }
+}
+.amount-pulse {
+  animation: amountPulse 380ms var(--ease-out);
+}
+
+/* Celebration burst */
+@keyframes burst {
+  0% { transform: scale(0.4); opacity: 1; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.burst-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid var(--success);
+  animation: burst 600ms var(--ease-out) forwards;
+  pointer-events: none;
+}
+
+/* Photo view modal */
+.photo-view {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn var(--d-fast) var(--ease);
+}
+.photo-view img {
+  max-width: 100%;
+  max-height: 68dvh;
+  object-fit: contain;
+}
+.photo-view-meta {
+  color: #dbeafe;
+  text-align: center;
+  padding: var(--sp-4);
+}
+
+/* Search input */
+.search-box {
+  position: relative;
+}
+.search-box .input {
+  padding-left: 40px;
+}
+.search-box svg {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* Workout history expandable */
+.exercise-list {
+  margin-top: var(--sp-2);
+  background: var(--surface-2);
+  border-radius: var(--r-s);
+  padding: var(--sp-2) var(--sp-3);
+}
+.exercise-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  font-size: var(--fs-sm);
+  border-bottom: 1px dashed var(--border);
+}
+.exercise-row:last-child {
+  border-bottom: none;
+}
+.exercise-row .ex-name {
+  font-weight: 600;
+}
+.exercise-row .ex-detail {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hover/active feedback for pressable cards */
+.pressable {
+  cursor: pointer;
+  transition: transform var(--d-fast) var(--spring);
+}
+.pressable:active {
+  transform: scale(0.97);
+}

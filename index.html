@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Your personal life, fitness, goals and journal progress dashboard.">
+  <meta name="theme-color" content="#0a0e14" id="meta-theme-color">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LifeProgress">
+  <!-- Relative paths so the app deploys at a domain root OR a subpath
+       (e.g. GitHub Pages project sites) without changes. -->
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <title>Life Progress</title>
+  <link rel="stylesheet" href="./css/theme.css">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/screens.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <main id="screen-root" class="screen-root" aria-live="polite"></main>
+    <nav id="tabbar" class="tabbar" aria-label="Primary navigation"></nav>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <div id="onboarding-root"></div>
+
+  <noscript>
+    <div style="padding:2rem;text-align:center;font-family:sans-serif">Life Progress needs JavaScript to run.</div>
+  </noscript>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
