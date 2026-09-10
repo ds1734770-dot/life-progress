@@ -10,6 +10,7 @@
  * Every value is calculated from real stored data; empty states are honest.
  */
 import { getSettings, saveSettings } from '../settings.js';
+import { avatarMarkup } from '../personalization.js';
 import * as water from '../water.js';
 import * as goals from '../goals.js';
 import * as gym from '../gym.js';
@@ -52,12 +53,6 @@ export async function mount(root, params) {
   const quote = quoteOfTheDay();
 
   const name = (settings.name || '').trim() || 'friend';
-  const initials = name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
   const bg = settings.backgroundImage;
 
   root.innerHTML = `
@@ -67,7 +62,7 @@ export async function mount(root, params) {
           <div class="dash-hello">${formatDate(todayKey(), { noToday: true })}</div>
           <h1 class="dash-name">${ui.escapeHtml(greetingFor())}, ${ui.escapeHtml(name)}.</h1>
         </div>
-        <div class="avatar">${ui.escapeHtml(initials)}</div>
+        <div class="dash-avatar">${avatarMarkup(settings, 44)}</div>
       </div>
       <div class="dash-quote">
         <p>${ui.escapeHtml(quote.text)}</p>

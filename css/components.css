@@ -613,6 +613,26 @@
   font-weight: 800;
   font-size: var(--fs-lg);
   flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: 0 0 0 2px var(--surface), 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+/* V1.1 variants — image avatars fill the circle; initials keep the tile look. */
+.avatar.avatar-photo,
+.avatar-photo {
+  padding: 0;
+  background: var(--surface-2);
+}
+.avatar-photo img,
+.avatar-photo svg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 50%;
+}
+.avatar-svg {
+  display: inline-flex;
+  flex-shrink: 0;
 }
 
 /* ------- Photo grid ------- */

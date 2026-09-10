@@ -87,7 +87,13 @@ try {
   await send('Page.enable');
   await send('DOM.enable');
 
-  // Onboarding
+  // Onboarding (the V1.1 launch overlay is up during the first seconds —
+  // capture it before it auto-dismisses).
+  await waitFor(`document.getElementById('launch-screen') !== null || document.querySelector('.onboarding') !== null`, 8000, 'boot visuals');
+  if (await evaluate(`document.getElementById('launch-screen') !== null`)) {
+    await shot('00-launch');
+    await waitFor(`document.getElementById('launch-screen') === null`, 8000, 'launch overlay done');
+  }
   await waitFor(`document.querySelector('.onboarding') !== null`);
   await shot('01-onboarding');
   await click('.onboarding #ob-next');
@@ -151,6 +157,7 @@ try {
     ['photos', 'photos'],
     ['journal', 'journal'],
     ['settings', 'settings'],
+    ['avatar', 'avatar'],
   ];
   for (const [route, name] of darkScreens) {
     await evaluate(`location.hash = '#/${route}'`);

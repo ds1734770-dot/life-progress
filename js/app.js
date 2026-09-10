@@ -1,14 +1,16 @@
 /**
  * Life Progress — bootstrap.
  * 1. Load settings + apply theme
- * 2. Render bottom navigation
- * 3. Run onboarding on first launch
- * 4. Navigate to the current route
- * 5. Register the service worker (offline support)
+ * 2. Cinematic motivational launch experience (once per app session)
+ * 3. Render bottom navigation
+ * 4. Run onboarding on first launch
+ * 5. Navigate to the current route
+ * 6. Register the service worker (offline support)
  */
 import { loadSettings, getSettings, onSystemThemeChange } from './settings.js';
 import { navigate, renderTabbar, currentRouteName } from './router.js';
 import { showOnboarding } from './onboarding.js';
+import { playLaunchExperience } from './launch.js';
 
 async function boot() {
   try {
@@ -17,6 +19,15 @@ async function boot() {
     console.error('[LifeProgress] Failed to load settings', err);
   }
   onSystemThemeChange(() => {});
+
+  // V1.1 — motivational launch ritual. Runs only at session start (this
+  // function), never during internal navigation. It is bounded and skippable,
+  // and cannot block boot: playLaunchExperience always resolves.
+  try {
+    await playLaunchExperience();
+  } catch (err) {
+    console.error('[LifeProgress] Launch experience skipped', err);
+  }
 
   renderTabbar();
 

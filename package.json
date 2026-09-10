@@ -1,14 +1,16 @@
 {
   "name": "life-progress",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Personal life, fitness, goals and journal progress dashboard — a free-first offline PWA.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "icons": "node scripts/make-icons.js",
-    "test": "node --test test/utils.test.js",
+    "launch-bg": "node scripts/make-launch-bg.js",
+    "test": "node --test test/utils.test.js test/personalization.test.js",
     "smoke": "node scripts/smoke-test.js",
     "qa": "node scripts/qa-extended.js",
+    "qa:v11": "node scripts/qa-v11.js",
     "screenshots": "node scripts/screenshots.js"
   },
   "license": "MIT"

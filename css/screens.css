@@ -371,3 +371,298 @@
 .pressable:active {
   transform: scale(0.97);
 }
+
+/* ============================================================
+   V1.1 — CINEMATIC MOTIVATIONAL LAUNCH EXPERIENCE
+   Shown once per app session at boot; never during navigation.
+   ============================================================ */
+.launch-screen {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-onboarding) + 10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #070b12;
+  transition: opacity 500ms var(--ease), transform 500ms var(--ease);
+}
+.launch-screen.is-leaving {
+  opacity: 0;
+  transform: scale(0.96);
+  pointer-events: none;
+}
+.launch-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.12);
+  filter: blur(16px) brightness(0.92);
+  opacity: 0;
+  transition: opacity 1100ms var(--ease-out), transform 1300ms var(--ease-out), filter 1300ms var(--ease-out);
+  will-change: opacity, transform, filter;
+}
+.launch-bg.is-in {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0) brightness(0.92);
+}
+/* Adaptive veil — keeps the quote readable on any image without
+   permanently darkening the user's photo (launch overlay only). */
+.launch-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(90% 60% at 50% 42%, rgba(4, 8, 14, 0.38) 0%, rgba(4, 8, 14, 0.12) 55%, rgba(4, 8, 14, 0) 100%),
+    linear-gradient(180deg, rgba(4, 8, 14, 0.3) 0%, rgba(4, 8, 14, 0.42) 55%, rgba(4, 8, 14, 0.82) 100%);
+}
+.launch-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  color: #fff;
+  max-width: 340px;
+  padding: 0 var(--sp-6);
+}
+.launch-mark {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 64px;
+  line-height: 0.6;
+  color: var(--accent);
+  opacity: 0;
+  transform: translateY(12px) scale(0.9);
+  transition: opacity 600ms var(--ease-out), transform 600ms var(--spring);
+  margin-bottom: var(--sp-3);
+}
+.launch-mark.is-in {
+  opacity: 0.95;
+  transform: translateY(0) scale(1);
+}
+.launch-quote {
+  font-size: clamp(24px, 7vw, 32px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.32;
+  text-wrap: balance;
+  overflow-wrap: anywhere; /* a 120-character quote must wrap, not overflow */
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(15px);
+  transition: opacity 700ms var(--ease-out), transform 700ms var(--ease-out);
+}
+.launch-quote.is-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.launch-rule {
+  width: 64px;
+  height: 2px;
+  margin: var(--sp-5) 0 var(--sp-4);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  transform: scaleX(0);
+  transition: transform 550ms var(--ease-out) 120ms;
+}
+.launch-rule.is-in {
+  transform: scaleX(1);
+}
+.launch-brand {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 550ms var(--ease-out), transform 550ms var(--ease-out);
+}
+.launch-brand.is-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.launch-skip {
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 26px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background var(--d-fast) var(--ease);
+}
+.launch-skip:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Settings — miniature live preview of the launch experience. */
+.launch-preview {
+  position: relative;
+  margin-top: 10px;
+  height: 150px;
+  border-radius: var(--r-m);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--hero-grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.launch-preview-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+.launch-preview-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  color: #fff;
+  padding: 0 var(--sp-4);
+  max-width: 100%;
+}
+.launch-preview-quote {
+  font-size: var(--fs-md);
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.launch-preview-rule {
+  width: 34px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  margin: 8px 0 6px;
+}
+.launch-preview-brand {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+/* Reduced motion — everything appears immediately, exit is a plain fade. */
+.launch-screen.reduced .launch-bg,
+.launch-screen.reduced .launch-mark,
+.launch-screen.reduced .launch-quote,
+.launch-screen.reduced .launch-rule,
+.launch-screen.reduced .launch-brand {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .launch-bg,
+  .launch-mark,
+  .launch-quote,
+  .launch-rule,
+  .launch-brand {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    transition: none;
+  }
+  .launch-screen {
+    transition: opacity 200ms linear;
+  }
+}
+
+/* ============================================================
+   V1.1 — AVATAR PICKER
+   ============================================================ */
+.avatar-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-5) 0 var(--sp-2);
+}
+.avatar-hero-name {
+  font-size: var(--fs-lg);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.avatar-hero-sub {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+@media (max-width: 340px) {
+  .avatar-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.avatar-option {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  padding: 0;
+  background: var(--surface-2);
+  transition: transform var(--d-fast) var(--spring), border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.avatar-option:active {
+  transform: scale(0.92);
+}
+.avatar-option.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.avatar-option svg,
+.avatar-option img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.avatar-option .avatar-check {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  animation: popIn var(--d-base) var(--spring);
+}
+.avatar-choice-row {
+  display: flex;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+.avatar-choice-row .btn {
+  flex: 1;
+}

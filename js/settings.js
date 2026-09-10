@@ -3,6 +3,7 @@
  */
 import { dbGet, dbPut } from './db.js';
 import { defaultSettings } from './models.js';
+import { normalizeAvatar } from './personalization.js';
 
 let settings = null;
 // Guarded so the module can be imported in Node (unit tests); in the browser
@@ -12,14 +13,39 @@ const systemDark =
     ? window.matchMedia('(prefers-color-scheme: dark)')
     : null;
 
+/**
+ * Bundled fallback launch background (local asset — works offline, no
+ * external image API). Kept as a computed value so module consumers that
+ * are deployed under a subpath (GitHub Pages) still resolve correctly.
+ */
+export const LAUNCH_FALLBACK_BG =
+  typeof document !== 'undefined'
+    ? new URL('../assets/launch-bg.png', import.meta.url).href
+    : '';
+
+/**
+ * Merge stored settings with current defaults so records written by older
+ * versions (V1) gain the new personalization fields without any migration
+ * step or DB version bump. Invalid values fall back to defaults.
+ */
+function withDefaults(stored) {
+  const s = { ...defaultSettings(), ...stored };
+  if (typeof s.launchQuote !== 'string' || !s.launchQuote.trim()) {
+    s.launchQuote = defaultSettings().launchQuote;
+  }
+  s.avatar = normalizeAvatar(s.avatar);
+  if (!(s.avatarImage instanceof Blob)) s.avatarImage = null;
+  return s;
+}
+
 export async function loadSettings() {
-  settings = (await dbGet('settings', 'settings')) || defaultSettings();
+  settings = withDefaults((await dbGet('settings', 'settings')) || defaultSettings());
   applyTheme();
   return settings;
 }
 
 export function getSettings() {
-  if (!settings) settings = defaultSettings();
+  if (!settings) settings = withDefaults(defaultSettings());
   return settings;
 }
 
@@ -55,7 +81,7 @@ export function onSystemThemeChange(cb) {
 }
 
 export function resetSettings() {
-  settings = defaultSettings();
+  settings = withDefaults(defaultSettings());
   applyTheme();
   return settings;
 }

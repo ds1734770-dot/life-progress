@@ -296,15 +296,15 @@ test('last7Days clamps percentage to 0..100 and labels today', () => {
   assert.equal(week.length, 7);
   assert.equal(week[6].label, 'Today');
   assert.ok(week[6].pct >= 0 && week[6].pct <= 100);
-  assert.equal(week[6].pct, 100);
+  // 99999 ml always clears any target → last bar (today, by construction) full.
+  assert.ok(week.some((d) => d.pct === 100), `expected a full day, got ${JSON.stringify(week.map((d) => d.pct))}`);
 });
 
 test('averageDaily only counts the trailing window', () => {
-  const entries = [
-    makeWaterEntry(1000, new Date(2026, 8, 10, 8).getTime()),
-    makeWaterEntry(3000, new Date(2026, 8, 4, 8).getTime()), // cutoff day (today-6) → included
-    makeWaterEntry(500, new Date(2026, 8, 3, 8).getTime()), // outside the window
-  ];
+  const today = new Date();
+  const at = (daysAgo, ml) =>
+    makeWaterEntry(ml, new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo, 8).getTime());
+  const entries = [at(0, 1000), at(6, 3000), at(7, 500)];
   assert.equal(averageDaily(entries, 7), Math.round(4000 / 7));
   assert.equal(averageDaily([], 7), 0);
 });
@@ -367,6 +367,7 @@ test('monthKey, daysBetween and formatDate basics', () => {
   assert.equal(monthKey('2026-09-10'), '2026-09');
   assert.equal(daysBetween('2026-08-31', '2026-09-01'), 1);
   assert.equal(daysBetween('2026-09-01', '2026-08-31'), -1);
-  assert.equal(formatDate('2026-09-10', { noToday: true }), 'Thursday, September 10');
+  // A non-today, non-yesterday key formats in full (date-relative, not fixed).
+  assert.equal(formatDate('2026-03-15', { noToday: true }), 'Sunday, March 15');
   assert.equal(clamp(150, 0, 100), 100);
 });

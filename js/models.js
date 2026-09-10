@@ -160,6 +160,10 @@ export function defaultSettings() {
     goalsDefaultView: 'today',
     gymDefaultType: 'Strength',
     journalPrompt: 'How was your day?',
+    // --- V1.1 personalization ---
+    launchQuote: "Don't forget why u started.", // motivational launch quote
+    avatar: { type: 'builtin', value: 'sunrise' }, // { type: 'builtin'|'initials'|'custom', value }
+    avatarImage: null, // Blob — local, never uploaded (custom avatar only)
     createdAt: Date.now(),
   };
 }
