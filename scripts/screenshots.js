@@ -165,28 +165,16 @@ try {
     await shot(`dark-${name}`);
   }
 
-  // Tab dock focus states (V1.1 fluid navigation) — navigation crop via a
-  // short viewport so the bar stays visible, focus forced with real PointerEvents.
-  await evaluate(`location.hash = '#/dashboard'`);
-  await waitFor(`!!document.querySelector('#dash-hero')`);
-  await evaluate(`(() => {
-    const bar = document.querySelector('.tabbar');
-    const r = bar.querySelectorAll('.tab-item')[2].querySelector('.tab-icon').getBoundingClientRect();
-    bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
-  })()`);
-  await sleep(400);
+  // Floating dock + active capsule states (V1.1) — capsule travels with the
+  // active route, so we capture it on two different destinations.
+  await evaluate(`location.hash = '#/gym'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
+  await sleep(500); // capsule travel (~300ms) settles
   await shot('dock-focus-gym');
-  await evaluate(
-    `(() => {
-      const bar = document.querySelector('.tabbar');
-      const r = bar.querySelectorAll('.tab-item')[4].querySelector('.tab-icon').getBoundingClientRect();
-      bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
-    })()`
-  );
-  await sleep(400);
+  await evaluate(`location.hash = '#/journal'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
+  await sleep(500);
   await shot('dock-focus-journal');
-  await evaluate(`document.querySelector('.tabbar').dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))`);
-  await sleep(700);
 
   // Light theme
   await evaluate(`location.hash = '#/settings'`);

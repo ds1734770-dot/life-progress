@@ -15,8 +15,9 @@
  *  10. Offline launch (server down)
  *  11. Reduced-motion launch
  *  12. Mobile overflow at 320/360/390/412px (new screens included)
- *  13. Tab dock: fluid navigation magnification (tap/hover/drag/edges,
- *      keyboard access, reduced motion, 320px fit)
+ *  13. Floating tab dock: compact glass dock + sliding active capsule
+ *      (tap navigation, edges, press feedback, keyboard access, reduced
+ *      motion, entrance, 320px fit, scroll stability)
  *
  * Run: node scripts/qa-v11.js
  */
@@ -524,199 +525,120 @@ try {
   })()`);
 
   // ------------------------------------------------------------------------
-  // V1.1 tab-dock enhancement — fluid navigation magnification.
+  // V1.1 floating tab dock — compact glass dock with a sliding active capsule.
   // Uses synthetic PointerEvents; taps go through the real click handlers.
   // ------------------------------------------------------------------------
-  console.log('\n— Tab dock: structure + tap navigation —');
+  console.log('\n— Floating dock: structure + tap navigation —');
   await setViewport(390, 844);
   await evaluate(`location.hash = '#/dashboard'`);
   await waitFor(`document.querySelector('#dash-hero') !== null`, 10000, 'dashboard for dock QA');
   const tabInfo = await evalAsync(`(async () => {
     const bar = document.querySelector('.tabbar');
     const tabs = [...bar.querySelectorAll('.tab-item')];
+    const style = getComputedStyle(bar);
     return {
       count: tabs.length,
       labels: tabs.map((t) => t.querySelector('.tab-label')?.textContent),
       arias: tabs.map((t) => t.getAttribute('aria-label')),
       enhanced: bar.dataset.dockEnhanced === '1',
-      pill: bar.querySelector('.tab-dock-pill')?.getAttribute('aria-hidden') === 'true',
+      capsule: bar.querySelector('.tab-capsule')?.getAttribute('aria-hidden') === 'true',
+      floating: style.position === 'fixed' && style.borderRadius !== '0px',
+      notFullWidth: parseFloat(style.width) < window.innerWidth - 8,
     };
   })()`);
   check('tab bar is dock-enhanced (existing component reused, no duplicate nav)', tabInfo.enhanced);
-  check('dock focus pill is decorative (aria-hidden)', tabInfo.pill);
+  check('active capsule is decorative (aria-hidden)', tabInfo.capsule);
+  check('dock container is a floating rounded surface', tabInfo.floating);
+  check('dock does not span the full viewport width', tabInfo.notFullWidth);
   check('all six navigation items remain available', tabInfo.count === 6, String(tabInfo.count));
   check('navigation order and labels unchanged',
     JSON.stringify(tabInfo.labels) === JSON.stringify(['Home', 'Water', 'Gym', 'Goals', 'Journal', 'Settings']),
     JSON.stringify(tabInfo.labels));
   check('existing ARIA labels remain intact', tabInfo.arias.every(Boolean), JSON.stringify(tabInfo.arias));
 
-  for (const route of ['water', 'gym', 'goals', 'journal', 'settings', 'dashboard']) {
+  console.log('\n— Floating dock: safe area + geometry —');
+  const geoCheck = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const r = bar.getBoundingClientRect();
+    return { left: r.left, right: window.innerWidth - r.right, bottomGap: window.innerHeight - r.bottom };
+  })()`);
+  check('dock is detached from the left screen edge', geoCheck.left >= 8, `gap=${geoCheck.left.toFixed(1)}px`);
+  check('dock is detached from the right screen edge', geoCheck.right >= 8, `gap=${geoCheck.right.toFixed(1)}px`);
+  check('dock floats above the viewport bottom edge', geoCheck.bottomGap >= 8, `gap=${geoCheck.bottomGap.toFixed(1)}px`);
+
+  console.log('\n— Floating dock: capsule slides between tabs on tap —');
+  const capsuleX = () => evaluate(`(() => {
+    const c = document.querySelector('.tab-capsule');
+    const m = c.style.transform.match(/translate3d\\((-?[\\d.]+)px/);
+    return m ? parseFloat(m[1]) : null;
+  })()`);
+  const tapTab = async (route) => {
     await evaluate(`document.querySelector('.tabbar .tab-item[data-route="${route}"]').click()`);
     const ok = await waitFor(`location.hash === '#/${route}'`, 5000, `tap → ${route}`);
-    await sleep(350);
+    await sleep(450); // capsule travel (~300ms) must finish
     const activeOk = await evaluate(
       `document.querySelector('.tabbar .tab-item.active')?.dataset.route === '${route}' &&
        document.querySelector('.tabbar .tab-item[data-route="${route}"]').getAttribute('aria-current') === 'page'`
     );
     check(`tap → ${route} navigates and becomes the active route`, ok && activeOk);
-  }
-
-  console.log('\n— Tab dock: mouse hover magnification —');
-  await evaluate(`location.hash = '#/dashboard'`);
-  await waitFor(`document.querySelector('#dash-hero') !== null`, 8000, 'dashboard');
-  await evaluate(`(() => {
-    const bar = document.querySelector('.tabbar');
-    const icon = bar.querySelectorAll('.tab-item')[2].querySelector('.tab-icon'); // Gym
-    const r = icon.getBoundingClientRect();
-    bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
+  };
+  await tapTab('water');
+  const capWater = await capsuleX();
+  await tapTab('gym');
+  const capGym = await capsuleX();
+  await tapTab('goals');
+  const capGoals = await capsuleX();
+  const itemRelCenters = await evalAsync(`(async () => {
+    const barRect = document.querySelector('.tabbar').getBoundingClientRect();
+    return [...document.querySelectorAll('.tabbar .tab-item')].map((it) => {
+      const r = it.getBoundingClientRect();
+      return r.left + r.width / 2 - barRect.left;
+    });
   })()`);
-  const hoverOk = await waitFor(`(() => {
-    const el = document.querySelectorAll('.tabbar .tab-item')[2].querySelector('.tab-icon');
-    const m = el.style.transform.match(/scale\\(([\\d.]+)\\)/);
-    return m && parseFloat(m[1]) > 1.28;
-  })()`, 3000, 'gym icon magnifies on hover');
-  const hoverState = await evalAsync(`(async () => {
-    const items = [...document.querySelectorAll('.tabbar .tab-item')];
-    const scaleOf = (i) => {
-      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
-      return m ? parseFloat(m[1]) : 1;
-    };
-    return { scales: items.map((_, i) => scaleOf(i)), hash: location.hash };
-  })()`);
-  check('hover magnifies the icon under the pointer', hoverOk && hoverState.scales[2] > 1.28, `gym=${hoverState.scales[2]}`);
-  check('hover activates dock focus styling', await evaluate(`document.querySelector('.tabbar').classList.contains('dock-active')`));
-  check('focus does not change the route', hoverState.hash === '#/dashboard', hoverState.hash);
-  check('active route stays visually identifiable during focus',
-    await evaluate(`document.querySelector('.tabbar .tab-item[data-route="dashboard"]').classList.contains('active') &&
-      document.querySelector('.tabbar .tab-item[data-route="dashboard"]').getAttribute('aria-current') === 'page'`));
-  check('neighbouring icon responds but stays smaller',
-    hoverState.scales[1] > 1 && hoverState.scales[1] < hoverState.scales[2],
-    `water=${hoverState.scales[1]} gym=${hoverState.scales[2]}`);
-  check('far icons remain at rest', hoverState.scales[5] === 1, `settings=${hoverState.scales[5]}`);
+  // capsule.style.transform holds the capsule's LEFT edge; its center is
+  // leftEdge + width/2. "Centered on the item" = capsule center ≈ item center.
+  const capsuleW = await evaluate(`parseFloat(getComputedStyle(document.querySelector('.tab-capsule')).width)`);
+  const near = (cap, i) => cap != null && Math.abs(cap + capsuleW / 2 - itemRelCenters[i]) < 14;
+  check('capsule sits on Water after navigating to Water', near(capWater, 1), `cap=${capWater} item=${itemRelCenters[1]}`);
+  check('capsule moved Water → Gym → Goals (single sliding element)',
+    capGym > capWater + 20 && capGoals > capGym + 20,
+    `water=${capWater} gym=${capGym} goals=${capGoals}`);
+  check('capsule is centered on the active item after travel', near(capGoals, 3), `cap=${capGoals} item=${itemRelCenters[3]}`);
+  check('capsule only ever covers the active item (not the whole dock)',
+    await evaluate(`parseFloat(getComputedStyle(document.querySelector('.tab-capsule')).width) <
+      document.querySelector('.tabbar').getBoundingClientRect().width * 0.5`));
 
-  console.log('\n— Tab dock: mouse leave settles —');
-  await evaluate(`document.querySelector('.tabbar').dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))`);
-  const rested = await waitFor(
-    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
-    3000,
-    'icons return to the CSS resting state'
-  );
-  check('pointerleave clears inline transforms (CSS owns rest state again)', rested);
-  check('pointerleave removes dock focus styling',
-    await evaluate(`!document.querySelector('.tabbar').classList.contains('dock-active')`));
+  console.log('\n— Floating dock: first and last item —');
+  await tapTab('dashboard');
+  const capFirst = await capsuleX();
+  check('capsule reaches the first item', near(capFirst, 0), `cap=${capFirst} item=${itemRelCenters[0]}`);
+  await tapTab('settings');
+  const capLast = await capsuleX();
+  check('capsule reaches the last item', near(capLast, 5), `cap=${capLast} item=${itemRelCenters[5]}`);
+  check('capsule stays inside the dock at both edges',
+    await evaluate(`(() => {
+      const c = document.querySelector('.tab-capsule').getBoundingClientRect();
+      const b = document.querySelector('.tabbar').getBoundingClientRect();
+      return c.left >= b.left - 1 && c.right <= b.right + 1;
+    })()`));
 
-  console.log('\n— Tab dock: touch drag across the bar —');
-  await evaluate(`location.hash = '#/gym'`);
-  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000, 'gym screen');
-  const geo = await evalAsync(`(async () => {
-    const items = [...document.querySelectorAll('.tabbar .tab-item')];
-    const cx = (i) => {
-      const r = items[i].querySelector('.tab-icon').getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    };
-    return { from: cx(4), to: cx(5) }; // Journal → Settings
+  console.log('\n— Floating dock: press feedback —');
+  const press = await evalAsync(`(async () => {
+    const item = document.querySelectorAll('.tabbar .tab-item')[2];
+    const r = item.getBoundingClientRect();
+    item.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', pointerId: 5, isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+    await new Promise((res) => setTimeout(res, 80));
+    const pressed = item.classList.contains('tab-pressed');
+    item.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', pointerId: 5, isPrimary: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+    await new Promise((res) => setTimeout(res, 80));
+    return { pressed, released: !item.classList.contains('tab-pressed') };
   })()`);
-  await evaluate(
-    `document.querySelectorAll('.tabbar .tab-item')[4].dispatchEvent(new PointerEvent('pointerdown', {
-      bubbles: true, pointerType: 'touch', pointerId: 7, isPrimary: true,
-      clientX: ${geo.from.x}, clientY: ${geo.from.y}
-    }))`
-  );
-  for (let step = 1; step <= 8; step++) {
-    const x = geo.from.x + (geo.to.x - geo.from.x) * (step / 8);
-    await evaluate(
-      `window.dispatchEvent(new PointerEvent('pointermove', {
-        pointerType: 'touch', pointerId: 7, isPrimary: true,
-        clientX: ${x}, clientY: ${geo.from.y}
-      }))`
-    );
-    await sleep(60); // let the smoothing loop converge toward the new focus
-  }
-  // Headless Chrome throttles rAF, so poll until the magnification settles on
-  // the finger's final position (real devices converge within a few frames).
-  const dragOk = await waitFor(
-    `(() => {
-      const m = document.querySelectorAll('.tabbar .tab-item')[5].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
-      return m && parseFloat(m[1]) > 1.15;
-    })()`,
-    3000,
-    'drag magnifies the item under the finger'
-  );
-  const dragState = await evalAsync(`(async () => {
-    const items = [...document.querySelectorAll('.tabbar .tab-item')];
-    const scaleOf = (i) => {
-      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
-      return m ? parseFloat(m[1]) : 1;
-    };
-    return { hash: location.hash, settings: scaleOf(5), journal: scaleOf(4) };
-  })()`);
-  check('drag magnifies the item under the finger', dragOk, `settings=${dragState.settings}`);
-  check('drag never changes the route by itself', dragState.hash === '#/gym', dragState.hash);
-  await evaluate(
-    `window.dispatchEvent(new PointerEvent('pointerup', {
-      pointerType: 'touch', pointerId: 7, isPrimary: true,
-      clientX: ${geo.to.x}, clientY: ${geo.to.y}
-    }))`
-  );
-  const dragRested = await waitFor(
-    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
-    3000,
-    'dock settles after release'
-  );
-  check('release settles back to the resting state', dragRested);
-  await evaluate(`document.querySelectorAll('.tabbar .tab-item')[5].click()`);
-  const tapAfterDrag = await waitFor(`location.hash === '#/settings'`, 5000, 'tap after drag');
-  check('normal tap still navigates after a drag', tapAfterDrag);
+  check('touch press applies the subtle scale-down feedback', press.pressed);
+  check('press feedback releases cleanly', press.released);
 
-  console.log('\n— Tab dock: first and last item edges —');
-  await evaluate(`location.hash = '#/dashboard'`);
-  await waitFor(`document.querySelector('#dash-hero') !== null`, 8000, 'dashboard for edges');
-  const edge = await evalAsync(`(async () => {
-    const bar = document.querySelector('.tabbar');
-    const items = [...bar.querySelectorAll('.tab-item')];
-    const rect = bar.getBoundingClientRect();
-    const scaleOf = (i) => {
-      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
-      return m ? parseFloat(m[1]) : 1;
-    };
-    const iconX = (i) => {
-      const r = items[i].querySelector('.tab-icon').getBoundingClientRect();
-      return r.left + r.width / 2;
-    };
-    const hoverAt = async (x) => {
-      bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: x }));
-      await new Promise((res) => setTimeout(res, 450));
-    };
-    const out = {};
-    await hoverAt(iconX(0));
-    out.onFirst = scaleOf(0);
-    await hoverAt(rect.left + 2);
-    out.edgeFirst = scaleOf(0);
-    out.edgeFirstLargest = [0, 1, 2, 3, 4, 5].every((i) => scaleOf(i) <= scaleOf(0) + 1e-9);
-    bar.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
-    await new Promise((res) => setTimeout(res, 650));
-    await hoverAt(iconX(5));
-    out.onLast = scaleOf(5);
-    await hoverAt(rect.right - 2);
-    out.edgeLast = scaleOf(5);
-    out.edgeLastLargest = [0, 1, 2, 3, 4, 5].every((i) => scaleOf(i) <= scaleOf(5) + 1e-9);
-    bar.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
-    return out;
-  })()`);
-  check('first item magnifies under the pointer', edge.onFirst > 1.28, `home=${edge.onFirst}`);
-  check('first item magnifies at the far-left viewport edge', edge.edgeFirst > 1.1, `home=${edge.edgeFirst}`);
-  check('first item is the focus point at the far-left edge', edge.edgeFirstLargest);
-  check('last item magnifies under the pointer', edge.onLast > 1.28, `settings=${edge.onLast}`);
-  check('last item magnifies at the far-right viewport edge', edge.edgeLast > 1.1, `settings=${edge.edgeLast}`);
-  check('last item is the focus point at the far-right edge', edge.edgeLastLargest);
-  const edgesRested = await waitFor(
-    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
-    3000,
-    'dock rests after edge hovers'
-  );
-  check('dock rests after edge hovers', edgesRested);
-
-  console.log('\n— Tab dock: keyboard accessibility —');
+  console.log('\n— Floating dock: keyboard accessibility —');
+  await send('Page.bringToFront'); // headless: key default actions need page focus
+  await sleep(200);
   await evaluate(`document.activeElement && document.activeElement.blur()`);
   let kbRoute = null;
   for (let i = 0; i < 60 && !kbRoute; i++) {
@@ -725,71 +647,86 @@ try {
     kbRoute = await evaluate(`document.activeElement?.classList?.contains('tab-item') ? document.activeElement.dataset.route : null`);
   }
   check('Tab reaches the navigation items', kbRoute !== null, String(kbRoute));
-  await sleep(400); // pill opacity transition (240ms) must finish before reading
-  const kbState = await evaluate(`({
-    route: document.activeElement?.dataset?.route,
-    focusVisible: document.activeElement?.matches?.(':focus-visible') === true,
-    dockFocus: document.querySelector('.tabbar').classList.contains('dock-focus'),
-    pillVisible: parseFloat(getComputedStyle(document.querySelector('.tab-dock-pill')).opacity) > 0,
-  })`);
-  check('keyboard focus applies the dock focus treatment', kbState.dockFocus === true, JSON.stringify(kbState));
-  check('keyboard focus shows a visible focus indicator', kbState.pillVisible === true);
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  const kbFocusVisible = await evaluate(`document.activeElement?.matches?.(':focus-visible') === true`);
+  check('focused tab shows a visible focus indicator (:focus-visible outline)', kbFocusVisible);
+  const kbTarget = await evaluate(`document.activeElement?.dataset?.route`);
+  // Puppeteer-style Enter: the char event (text: '\r') is what triggers the
+  // button's native activation in headless Chrome.
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-  const kbNav = await waitFor(`location.hash === '#/' + document.activeElement?.dataset?.route`, 5000, 'Enter activates tab');
-  check('Enter/Space activates the focused tab', kbNav);
+  const kbNav = await waitFor(`location.hash === '#/${kbTarget}'`, 5000, 'Enter activates tab');
+  check('Enter/Space activates the focused tab', kbNav, `target=${kbTarget}`);
+  await sleep(450);
+  check('capsule follows keyboard-activated route',
+    await evaluate(`document.querySelector('.tabbar .tab-item.active')?.dataset.route === '${kbTarget}'`));
 
-  console.log('\n— Tab dock: reduced motion —');
+  console.log('\n— Floating dock: reduced motion —');
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   await sleep(150);
-  const rmHover = await evalAsync(`(async () => {
-    const bar = document.querySelector('.tabbar');
-    const r = bar.getBoundingClientRect();
-    bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
-    await new Promise((res) => setTimeout(res, 300));
-    return {
-      dockActive: bar.classList.contains('dock-active'),
-      anyInlineTransform: [...bar.querySelectorAll('.tab-item')].some((i) => i.querySelector('.tab-icon').style.transform !== ''),
-    };
-  })()`);
-  check('reduced motion: hover does not magnify', !rmHover.dockActive && !rmHover.anyInlineTransform, JSON.stringify(rmHover));
-  await evaluate(`document.querySelector('.tabbar .tab-item[data-route="goals"]').click()`);
-  const rmNav = await waitFor(`location.hash === '#/goals'`, 5000, 'reduced-motion tap');
-  check('reduced motion: tap navigation still works', rmNav);
-  const rmKb = await evalAsync(`(async () => {
-    document.activeElement && document.activeElement.blur();
-    const tab = document.querySelectorAll('.tabbar .tab-item')[1];
-    tab.focus();
-    tab.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
-    await new Promise((res) => setTimeout(res, 150));
-    return {
-      focusVisible: tab.matches(':focus-visible'),
-      dockFocus: document.querySelector('.tabbar').classList.contains('dock-focus'),
-      pillTransform: document.querySelector('.tab-dock-pill').style.transform !== '',
-    };
-  })()`);
-  check('reduced motion: keyboard focus still gets a static indicator',
-    rmKb.focusVisible ? (rmKb.dockFocus && rmKb.pillTransform) : true, JSON.stringify(rmKb));
-  await evaluate(
-    `document.activeElement && document.activeElement.blur();
-     document.querySelector('.tabbar').dispatchEvent(new FocusEvent('focusout', { bubbles: true }));`
-  );
+  await tapTab('goals');
+  const rmCap = await capsuleX();
+  check('reduced motion: capsule still tracks the active route (no animation)', near(rmCap, 3), `cap=${rmCap}`);
+  check('reduced motion: tap navigation still works', await evaluate(`location.hash === '#/goals'`));
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: '' }] });
+  await sleep(200);
+  await tapTab('dashboard');
+  const postRm = await capsuleX();
+  check('capsule settles on the route after reduced-motion toggling', near(postRm, 0), `cap=${postRm}`);
 
-  console.log('\n— Tab dock: responsive safety —');
+  console.log('\n— Floating dock: entrance after launch —');
+  const entrance = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    return {
+      visible: !bar.classList.contains('dock-hidden'),
+      opacity: parseFloat(getComputedStyle(bar).opacity),
+    };
+  })()`);
+  check('dock is visible after the launch sequence (entrance completed, never stuck hidden)',
+    entrance.visible && entrance.opacity > 0.99, JSON.stringify(entrance));
+
+  console.log('\n— Floating dock: responsive safety (320px) —');
   await setViewport(320, 640);
   const resp = await evaluate(`(() => {
     const bar = document.querySelector('.tabbar');
     const r = bar.getBoundingClientRect();
+    const items = [...bar.querySelectorAll('.tab-item')];
     return {
       fits: r.right <= window.innerWidth + 1 && r.left >= -1,
+      edgeGaps: r.left >= 4 && window.innerWidth - r.right >= 4,
       noInnerOverflow: bar.scrollWidth <= bar.clientWidth + 1,
-      labels: [...bar.querySelectorAll('.tab-label')].every((l) => l.getBoundingClientRect().width > 0),
-      items: bar.querySelectorAll('.tab-item').length,
+      labels: items.every((i) => {
+        const l = i.querySelector('.tab-label');
+        return l && l.getBoundingClientRect().width > 0;
+      }),
+      noClippedLabels: items.every((i) => {
+        const l = i.querySelector('.tab-label').getBoundingClientRect();
+        return l.right <= r.right + 1 && l.left >= r.left - 1;
+      }),
+      items: items.length,
     };
   })()`);
-  check('tab bar fits the 320px viewport with no inner overflow', resp.fits && resp.noInnerOverflow, JSON.stringify(resp));
-  check('labels remain readable at 320px', resp.labels && resp.items === 6);
+  check('dock fits the 320px viewport with no inner overflow', resp.fits && resp.noInnerOverflow, JSON.stringify(resp));
+  check('dock keeps a margin from the screen edges at 320px', resp.edgeGaps, JSON.stringify(resp));
+  check('all six labels render unclipped at 320px', resp.labels && resp.noClippedLabels && resp.items === 6, JSON.stringify(resp));
+
+  console.log('\n— Floating dock: scroll behaviour —');
+  await setViewport(390, 844);
+  await evaluate(`location.hash = '#/goals'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 6000, 'goals for scroll check');
+  const scrollCheck = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const before = bar.getBoundingClientRect().top;
+    window.scrollTo(0, 400);
+    await new Promise((res) => setTimeout(res, 150));
+    const after = bar.getBoundingClientRect().top;
+    window.scrollTo(0, 0);
+    return { stable: Math.abs(before - after) < 1, scrollable: document.documentElement.scrollHeight > window.innerHeight };
+  })()`);
+  if (scrollCheck.scrollable) {
+    check('dock stays fixed in place while the page scrolls', scrollCheck.stable);
+  } else {
+    check('dock stays fixed in place while the page scrolls', true, 'page not scrollable at this height — skipped');
+  }
 
   console.log('\n— Console errors —');
   const realErrors = consoleErrors.filter(

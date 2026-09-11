@@ -376,23 +376,38 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ------- Tab bar ------- */
+/* ------- Floating tab dock ------- */
 .tabbar {
   position: fixed;
-  bottom: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
   left: 50%;
   transform: translateX(-50%);
-  width: 100%;
-  max-width: 480px;
+  width: min(92vw, 460px);
   display: flex;
   background: var(--glass);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  border-top: 1px solid var(--border);
-  padding: calc(6px + env(safe-area-inset-bottom, 0px)) 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 6px;
   z-index: var(--z-tabbar);
-  /* Vertical swipes still scroll the page; horizontal drags feed the dock. */
+  /* Vertical swipes still scroll the page. */
   touch-action: pan-y;
+}
+/* Browsers without backdrop-filter get a more opaque surface as fallback. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tabbar {
+    background: var(--surface);
+  }
+}
+/* One-time float-in after launch (js/tabbar-dock.js primes/plays it). */
+.tabbar.dock-hidden {
+  opacity: 0;
+  transform: translateX(-50%) translateY(16px);
+}
+.tabbar.dock-enter {
+  transition: opacity var(--d-base) var(--ease-out), transform var(--d-slow) var(--ease-out);
 }
 .tab-item {
   flex: 1;
@@ -400,14 +415,16 @@
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 6px 2px 4px;
-  border-radius: 12px;
+  padding: 7px 2px 5px;
+  border-radius: var(--r-m);
   color: var(--text-3);
-  transition: color var(--d-base) var(--ease), transform var(--d-fast) var(--spring);
+  transition: color var(--d-base) var(--ease), transform var(--d-fast) var(--ease);
   position: relative;
+  z-index: 1;
+  touch-action: manipulation;
 }
-.tab-item:active {
-  transform: scale(0.92);
+.tab-item.tab-pressed {
+  transform: scale(0.97);
 }
 .tab-item.active {
   color: var(--accent);
@@ -425,35 +442,28 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
-/* Fluid dock focus (V1.1) — transform-only magnification driven by
-   js/tabbar-dock.js. The resting state stays fully owned by the rules above. */
-.tab-dock-pill {
+/* Sliding active capsule (V1.1) — one element travelling between tabs,
+   positioned by js/tabbar-dock.js. Transform + width only. */
+.tab-capsule {
   position: absolute;
-  top: calc(6px + env(safe-area-inset-bottom, 0px));
+  top: 4px;
+  bottom: 4px;
   left: 0;
-  width: 46px;
-  height: 48px;
-  border-radius: 16px;
+  width: 52px;
+  border-radius: var(--r-m);
   background: var(--accent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--d-base) var(--ease);
-}
-.tabbar.dock-active .tab-dock-pill,
-.tabbar.dock-focus .tab-dock-pill {
   opacity: 0.14;
-}
-/* While the dock loop is live it writes transforms every frame — the CSS
-   transition on the icon would lag behind and is switched off. */
-.tabbar.dock-live .tab-icon {
-  transition: none;
-  will-change: transform;
+  pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tab-dock-pill {
+  .tab-item .tab-icon {
     transition: none;
+  }
+  .tabbar.dock-enter {
+    transition: opacity 200ms linear;
   }
 }
 

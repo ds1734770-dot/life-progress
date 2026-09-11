@@ -94,6 +94,9 @@ export function updateTabbar(name) {
     item.classList.toggle('active', item.dataset.route === active);
     item.setAttribute('aria-current', item.dataset.route === active ? 'page' : 'false');
   });
+  // V1.1 — the active capsule slides to the new destination after the
+  // route state (.active / aria-current) has been updated.
+  dockHandle?.moveCapsule();
 }
 
 export function renderTabbar() {
@@ -111,11 +114,15 @@ export function renderTabbar() {
       return btn;
     })
   );
-  // V1.1 — fluid dock magnification on the existing items (guarded; the bar
-  // is only ever rendered once per session, and renderTabbar's replaceChildren
-  // above wipes any previous dock state, so re-enhancing is safe).
+  // V1.1 — floating dock + sliding active capsule on the existing items
+  // (guarded; the bar is only rendered once per session, and renderTabbar's
+  // replaceChildren above wipes any previous dock state, so re-enhancing is
+  // safe). The entrance is primed here and plays on the next frame — after
+  // the launch experience has finished, so the two never compete.
   dockHandle?.destroy();
   dockHandle = enhanceTabbar(bar);
+  dockHandle.primeEntrance();
+  requestAnimationFrame(() => dockHandle?.playEntrance());
 }
 
 let lastRoute = null;
