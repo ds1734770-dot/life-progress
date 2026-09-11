@@ -391,6 +391,8 @@
   border-top: 1px solid var(--border);
   padding: calc(6px + env(safe-area-inset-bottom, 0px)) 6px 6px;
   z-index: var(--z-tabbar);
+  /* Vertical swipes still scroll the page; horizontal drags feed the dock. */
+  touch-action: pan-y;
 }
 .tab-item {
   flex: 1;
@@ -423,6 +425,36 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+/* Fluid dock focus (V1.1) — transform-only magnification driven by
+   js/tabbar-dock.js. The resting state stays fully owned by the rules above. */
+.tab-dock-pill {
+  position: absolute;
+  top: calc(6px + env(safe-area-inset-bottom, 0px));
+  left: 0;
+  width: 46px;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--d-base) var(--ease);
+}
+.tabbar.dock-active .tab-dock-pill,
+.tabbar.dock-focus .tab-dock-pill {
+  opacity: 0.14;
+}
+/* While the dock loop is live it writes transforms every frame — the CSS
+   transition on the icon would lag behind and is switched off. */
+.tabbar.dock-live .tab-icon {
+  transition: none;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-dock-pill {
+    transition: none;
+  }
 }
 
 /* ------- Modal / sheet ------- */

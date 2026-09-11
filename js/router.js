@@ -14,6 +14,7 @@ import { mount as mountSettings } from './screens/settings.js';
 import { mount as mountAvatar } from './screens/avatar.js';
 import { mount as mountPhotos } from './screens/photos.js';
 import { icon } from './ui.js';
+import { enhanceTabbar } from './tabbar-dock.js';
 
 export const TABS = [
   { route: 'dashboard', label: 'Home', iconName: 'home' },
@@ -85,6 +86,8 @@ export function go(path) {
   }
 }
 
+let dockHandle = null;
+
 export function updateTabbar(name) {
   const active = name === 'photos' || name === 'journal' ? (name === 'photos' ? 'gym' : 'journal') : name;
   document.querySelectorAll('.tab-item').forEach((item) => {
@@ -108,6 +111,11 @@ export function renderTabbar() {
       return btn;
     })
   );
+  // V1.1 — fluid dock magnification on the existing items (guarded; the bar
+  // is only ever rendered once per session, and renderTabbar's replaceChildren
+  // above wipes any previous dock state, so re-enhancing is safe).
+  dockHandle?.destroy();
+  dockHandle = enhanceTabbar(bar);
 }
 
 let lastRoute = null;

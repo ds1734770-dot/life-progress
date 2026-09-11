@@ -7,7 +7,7 @@
     "start": "node server.js",
     "icons": "node scripts/make-icons.js",
     "launch-bg": "node scripts/make-launch-bg.js",
-    "test": "node --test test/utils.test.js test/personalization.test.js",
+    "test": "node --test test/utils.test.js test/personalization.test.js test/tabbar-dock.test.js",
     "smoke": "node scripts/smoke-test.js",
     "qa": "node scripts/qa-extended.js",
     "qa:v11": "node scripts/qa-v11.js",

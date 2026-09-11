@@ -15,6 +15,8 @@
  *  10. Offline launch (server down)
  *  11. Reduced-motion launch
  *  12. Mobile overflow at 320/360/390/412px (new screens included)
+ *  13. Tab dock: fluid navigation magnification (tap/hover/drag/edges,
+ *      keyboard access, reduced motion, 320px fit)
  *
  * Run: node scripts/qa-v11.js
  */
@@ -520,6 +522,274 @@ try {
     await s.saveSettings({ launchQuote: 'Small steps. Big results.' });
     return true;
   })()`);
+
+  // ------------------------------------------------------------------------
+  // V1.1 tab-dock enhancement — fluid navigation magnification.
+  // Uses synthetic PointerEvents; taps go through the real click handlers.
+  // ------------------------------------------------------------------------
+  console.log('\n— Tab dock: structure + tap navigation —');
+  await setViewport(390, 844);
+  await evaluate(`location.hash = '#/dashboard'`);
+  await waitFor(`document.querySelector('#dash-hero') !== null`, 10000, 'dashboard for dock QA');
+  const tabInfo = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const tabs = [...bar.querySelectorAll('.tab-item')];
+    return {
+      count: tabs.length,
+      labels: tabs.map((t) => t.querySelector('.tab-label')?.textContent),
+      arias: tabs.map((t) => t.getAttribute('aria-label')),
+      enhanced: bar.dataset.dockEnhanced === '1',
+      pill: bar.querySelector('.tab-dock-pill')?.getAttribute('aria-hidden') === 'true',
+    };
+  })()`);
+  check('tab bar is dock-enhanced (existing component reused, no duplicate nav)', tabInfo.enhanced);
+  check('dock focus pill is decorative (aria-hidden)', tabInfo.pill);
+  check('all six navigation items remain available', tabInfo.count === 6, String(tabInfo.count));
+  check('navigation order and labels unchanged',
+    JSON.stringify(tabInfo.labels) === JSON.stringify(['Home', 'Water', 'Gym', 'Goals', 'Journal', 'Settings']),
+    JSON.stringify(tabInfo.labels));
+  check('existing ARIA labels remain intact', tabInfo.arias.every(Boolean), JSON.stringify(tabInfo.arias));
+
+  for (const route of ['water', 'gym', 'goals', 'journal', 'settings', 'dashboard']) {
+    await evaluate(`document.querySelector('.tabbar .tab-item[data-route="${route}"]').click()`);
+    const ok = await waitFor(`location.hash === '#/${route}'`, 5000, `tap → ${route}`);
+    await sleep(350);
+    const activeOk = await evaluate(
+      `document.querySelector('.tabbar .tab-item.active')?.dataset.route === '${route}' &&
+       document.querySelector('.tabbar .tab-item[data-route="${route}"]').getAttribute('aria-current') === 'page'`
+    );
+    check(`tap → ${route} navigates and becomes the active route`, ok && activeOk);
+  }
+
+  console.log('\n— Tab dock: mouse hover magnification —');
+  await evaluate(`location.hash = '#/dashboard'`);
+  await waitFor(`document.querySelector('#dash-hero') !== null`, 8000, 'dashboard');
+  await evaluate(`(() => {
+    const bar = document.querySelector('.tabbar');
+    const icon = bar.querySelectorAll('.tab-item')[2].querySelector('.tab-icon'); // Gym
+    const r = icon.getBoundingClientRect();
+    bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
+  })()`);
+  const hoverOk = await waitFor(`(() => {
+    const el = document.querySelectorAll('.tabbar .tab-item')[2].querySelector('.tab-icon');
+    const m = el.style.transform.match(/scale\\(([\\d.]+)\\)/);
+    return m && parseFloat(m[1]) > 1.28;
+  })()`, 3000, 'gym icon magnifies on hover');
+  const hoverState = await evalAsync(`(async () => {
+    const items = [...document.querySelectorAll('.tabbar .tab-item')];
+    const scaleOf = (i) => {
+      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
+      return m ? parseFloat(m[1]) : 1;
+    };
+    return { scales: items.map((_, i) => scaleOf(i)), hash: location.hash };
+  })()`);
+  check('hover magnifies the icon under the pointer', hoverOk && hoverState.scales[2] > 1.28, `gym=${hoverState.scales[2]}`);
+  check('hover activates dock focus styling', await evaluate(`document.querySelector('.tabbar').classList.contains('dock-active')`));
+  check('focus does not change the route', hoverState.hash === '#/dashboard', hoverState.hash);
+  check('active route stays visually identifiable during focus',
+    await evaluate(`document.querySelector('.tabbar .tab-item[data-route="dashboard"]').classList.contains('active') &&
+      document.querySelector('.tabbar .tab-item[data-route="dashboard"]').getAttribute('aria-current') === 'page'`));
+  check('neighbouring icon responds but stays smaller',
+    hoverState.scales[1] > 1 && hoverState.scales[1] < hoverState.scales[2],
+    `water=${hoverState.scales[1]} gym=${hoverState.scales[2]}`);
+  check('far icons remain at rest', hoverState.scales[5] === 1, `settings=${hoverState.scales[5]}`);
+
+  console.log('\n— Tab dock: mouse leave settles —');
+  await evaluate(`document.querySelector('.tabbar').dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }))`);
+  const rested = await waitFor(
+    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
+    3000,
+    'icons return to the CSS resting state'
+  );
+  check('pointerleave clears inline transforms (CSS owns rest state again)', rested);
+  check('pointerleave removes dock focus styling',
+    await evaluate(`!document.querySelector('.tabbar').classList.contains('dock-active')`));
+
+  console.log('\n— Tab dock: touch drag across the bar —');
+  await evaluate(`location.hash = '#/gym'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000, 'gym screen');
+  const geo = await evalAsync(`(async () => {
+    const items = [...document.querySelectorAll('.tabbar .tab-item')];
+    const cx = (i) => {
+      const r = items[i].querySelector('.tab-icon').getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    };
+    return { from: cx(4), to: cx(5) }; // Journal → Settings
+  })()`);
+  await evaluate(
+    `document.querySelectorAll('.tabbar .tab-item')[4].dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, pointerType: 'touch', pointerId: 7, isPrimary: true,
+      clientX: ${geo.from.x}, clientY: ${geo.from.y}
+    }))`
+  );
+  for (let step = 1; step <= 8; step++) {
+    const x = geo.from.x + (geo.to.x - geo.from.x) * (step / 8);
+    await evaluate(
+      `window.dispatchEvent(new PointerEvent('pointermove', {
+        pointerType: 'touch', pointerId: 7, isPrimary: true,
+        clientX: ${x}, clientY: ${geo.from.y}
+      }))`
+    );
+    await sleep(60); // let the smoothing loop converge toward the new focus
+  }
+  // Headless Chrome throttles rAF, so poll until the magnification settles on
+  // the finger's final position (real devices converge within a few frames).
+  const dragOk = await waitFor(
+    `(() => {
+      const m = document.querySelectorAll('.tabbar .tab-item')[5].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
+      return m && parseFloat(m[1]) > 1.15;
+    })()`,
+    3000,
+    'drag magnifies the item under the finger'
+  );
+  const dragState = await evalAsync(`(async () => {
+    const items = [...document.querySelectorAll('.tabbar .tab-item')];
+    const scaleOf = (i) => {
+      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
+      return m ? parseFloat(m[1]) : 1;
+    };
+    return { hash: location.hash, settings: scaleOf(5), journal: scaleOf(4) };
+  })()`);
+  check('drag magnifies the item under the finger', dragOk, `settings=${dragState.settings}`);
+  check('drag never changes the route by itself', dragState.hash === '#/gym', dragState.hash);
+  await evaluate(
+    `window.dispatchEvent(new PointerEvent('pointerup', {
+      pointerType: 'touch', pointerId: 7, isPrimary: true,
+      clientX: ${geo.to.x}, clientY: ${geo.to.y}
+    }))`
+  );
+  const dragRested = await waitFor(
+    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
+    3000,
+    'dock settles after release'
+  );
+  check('release settles back to the resting state', dragRested);
+  await evaluate(`document.querySelectorAll('.tabbar .tab-item')[5].click()`);
+  const tapAfterDrag = await waitFor(`location.hash === '#/settings'`, 5000, 'tap after drag');
+  check('normal tap still navigates after a drag', tapAfterDrag);
+
+  console.log('\n— Tab dock: first and last item edges —');
+  await evaluate(`location.hash = '#/dashboard'`);
+  await waitFor(`document.querySelector('#dash-hero') !== null`, 8000, 'dashboard for edges');
+  const edge = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const items = [...bar.querySelectorAll('.tab-item')];
+    const rect = bar.getBoundingClientRect();
+    const scaleOf = (i) => {
+      const m = items[i].querySelector('.tab-icon').style.transform.match(/scale\\(([\\d.]+)\\)/);
+      return m ? parseFloat(m[1]) : 1;
+    };
+    const iconX = (i) => {
+      const r = items[i].querySelector('.tab-icon').getBoundingClientRect();
+      return r.left + r.width / 2;
+    };
+    const hoverAt = async (x) => {
+      bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: x }));
+      await new Promise((res) => setTimeout(res, 450));
+    };
+    const out = {};
+    await hoverAt(iconX(0));
+    out.onFirst = scaleOf(0);
+    await hoverAt(rect.left + 2);
+    out.edgeFirst = scaleOf(0);
+    out.edgeFirstLargest = [0, 1, 2, 3, 4, 5].every((i) => scaleOf(i) <= scaleOf(0) + 1e-9);
+    bar.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
+    await new Promise((res) => setTimeout(res, 650));
+    await hoverAt(iconX(5));
+    out.onLast = scaleOf(5);
+    await hoverAt(rect.right - 2);
+    out.edgeLast = scaleOf(5);
+    out.edgeLastLargest = [0, 1, 2, 3, 4, 5].every((i) => scaleOf(i) <= scaleOf(5) + 1e-9);
+    bar.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
+    return out;
+  })()`);
+  check('first item magnifies under the pointer', edge.onFirst > 1.28, `home=${edge.onFirst}`);
+  check('first item magnifies at the far-left viewport edge', edge.edgeFirst > 1.1, `home=${edge.edgeFirst}`);
+  check('first item is the focus point at the far-left edge', edge.edgeFirstLargest);
+  check('last item magnifies under the pointer', edge.onLast > 1.28, `settings=${edge.onLast}`);
+  check('last item magnifies at the far-right viewport edge', edge.edgeLast > 1.1, `settings=${edge.edgeLast}`);
+  check('last item is the focus point at the far-right edge', edge.edgeLastLargest);
+  const edgesRested = await waitFor(
+    `[...document.querySelectorAll('.tabbar .tab-item')].every((i) => !i.querySelector('.tab-icon').style.transform)`,
+    3000,
+    'dock rests after edge hovers'
+  );
+  check('dock rests after edge hovers', edgesRested);
+
+  console.log('\n— Tab dock: keyboard accessibility —');
+  await evaluate(`document.activeElement && document.activeElement.blur()`);
+  let kbRoute = null;
+  for (let i = 0; i < 60 && !kbRoute; i++) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+    kbRoute = await evaluate(`document.activeElement?.classList?.contains('tab-item') ? document.activeElement.dataset.route : null`);
+  }
+  check('Tab reaches the navigation items', kbRoute !== null, String(kbRoute));
+  await sleep(400); // pill opacity transition (240ms) must finish before reading
+  const kbState = await evaluate(`({
+    route: document.activeElement?.dataset?.route,
+    focusVisible: document.activeElement?.matches?.(':focus-visible') === true,
+    dockFocus: document.querySelector('.tabbar').classList.contains('dock-focus'),
+    pillVisible: parseFloat(getComputedStyle(document.querySelector('.tab-dock-pill')).opacity) > 0,
+  })`);
+  check('keyboard focus applies the dock focus treatment', kbState.dockFocus === true, JSON.stringify(kbState));
+  check('keyboard focus shows a visible focus indicator', kbState.pillVisible === true);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+  const kbNav = await waitFor(`location.hash === '#/' + document.activeElement?.dataset?.route`, 5000, 'Enter activates tab');
+  check('Enter/Space activates the focused tab', kbNav);
+
+  console.log('\n— Tab dock: reduced motion —');
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  await sleep(150);
+  const rmHover = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const r = bar.getBoundingClientRect();
+    bar.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', clientX: r.left + r.width / 2 }));
+    await new Promise((res) => setTimeout(res, 300));
+    return {
+      dockActive: bar.classList.contains('dock-active'),
+      anyInlineTransform: [...bar.querySelectorAll('.tab-item')].some((i) => i.querySelector('.tab-icon').style.transform !== ''),
+    };
+  })()`);
+  check('reduced motion: hover does not magnify', !rmHover.dockActive && !rmHover.anyInlineTransform, JSON.stringify(rmHover));
+  await evaluate(`document.querySelector('.tabbar .tab-item[data-route="goals"]').click()`);
+  const rmNav = await waitFor(`location.hash === '#/goals'`, 5000, 'reduced-motion tap');
+  check('reduced motion: tap navigation still works', rmNav);
+  const rmKb = await evalAsync(`(async () => {
+    document.activeElement && document.activeElement.blur();
+    const tab = document.querySelectorAll('.tabbar .tab-item')[1];
+    tab.focus();
+    tab.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    await new Promise((res) => setTimeout(res, 150));
+    return {
+      focusVisible: tab.matches(':focus-visible'),
+      dockFocus: document.querySelector('.tabbar').classList.contains('dock-focus'),
+      pillTransform: document.querySelector('.tab-dock-pill').style.transform !== '',
+    };
+  })()`);
+  check('reduced motion: keyboard focus still gets a static indicator',
+    rmKb.focusVisible ? (rmKb.dockFocus && rmKb.pillTransform) : true, JSON.stringify(rmKb));
+  await evaluate(
+    `document.activeElement && document.activeElement.blur();
+     document.querySelector('.tabbar').dispatchEvent(new FocusEvent('focusout', { bubbles: true }));`
+  );
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: '' }] });
+
+  console.log('\n— Tab dock: responsive safety —');
+  await setViewport(320, 640);
+  const resp = await evaluate(`(() => {
+    const bar = document.querySelector('.tabbar');
+    const r = bar.getBoundingClientRect();
+    return {
+      fits: r.right <= window.innerWidth + 1 && r.left >= -1,
+      noInnerOverflow: bar.scrollWidth <= bar.clientWidth + 1,
+      labels: [...bar.querySelectorAll('.tab-label')].every((l) => l.getBoundingClientRect().width > 0),
+      items: bar.querySelectorAll('.tab-item').length,
+    };
+  })()`);
+  check('tab bar fits the 320px viewport with no inner overflow', resp.fits && resp.noInnerOverflow, JSON.stringify(resp));
+  check('labels remain readable at 320px', resp.labels && resp.items === 6);
 
   console.log('\n— Console errors —');
   const realErrors = consoleErrors.filter(
