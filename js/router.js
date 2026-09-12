@@ -2,7 +2,7 @@
  * Router — hash-based navigation. Every major feature is a dedicated screen.
  *
  * Routes:
- *   #/dashboard  #/water  #/gym  #/goals  #/journal  #/settings
+ *   #/dashboard  #/water  #/gym  #/goals  #/journal  #/history  #/settings
  *   #/photos              #/photos/compare        #/journal/edit
  */
 import { mount as mountDashboard } from './screens/dashboard.js';
@@ -10,6 +10,7 @@ import { mount as mountWater } from './screens/water.js';
 import { mount as mountGym } from './screens/gym.js';
 import { mount as mountGoals } from './screens/goals.js';
 import { mount as mountJournal } from './screens/journal.js';
+import { mount as mountHistory } from './screens/history.js';
 import { mount as mountSettings } from './screens/settings.js';
 import { mount as mountAvatar } from './screens/avatar.js';
 import { mount as mountPhotos } from './screens/photos.js';
@@ -31,6 +32,7 @@ const SCREENS = {
   gym: { mount: mountGym },
   goals: { mount: mountGoals },
   journal: { mount: mountJournal },
+  history: { mount: mountHistory },
   settings: { mount: mountSettings },
   avatar: { mount: mountAvatar },
   photos: { mount: mountPhotos },

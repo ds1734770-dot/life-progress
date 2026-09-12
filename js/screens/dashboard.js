@@ -83,6 +83,7 @@ export async function mount(root, params) {
     </section>
 
     <section id="card-progress"></section>
+    <section id="card-history"></section>
     <section id="card-goals"></section>
     <section id="card-water"></section>
     <section id="card-gym"></section>
@@ -112,6 +113,7 @@ export async function mount(root, params) {
     'open-gym': () => go('gym'),
     'open-journal': () => go('journal'),
     'open-photos': () => go('photos'),
+    'open-history': () => go('history'),
     'water-mini': () => openQuickWaterSheet(root),
   });
 
@@ -179,6 +181,7 @@ async function refreshSections(root, which) {
 function updateSections(root, state, only = null) {
   const updaters = {
     progress: () => renderProgressCard(root, state),
+    history: () => renderHistoryCard(root),
     goals: () => renderGoalsCard(root, state),
     water: () => renderWaterCard(root, state),
     gym: () => renderGymCard(root, state),
@@ -229,6 +232,27 @@ function renderProgressCard(root, state) {
     </div>`;
   ui.setRing(node, pct);
   ui.animateCount(node.querySelector('#dash-pct'), pct, { format: (n) => `${Math.round(n)}%` });
+}
+
+function renderHistoryCard(root) {
+  const node = root.querySelector('#card-history');
+  if (!node) return; // screen was replaced mid-render
+  node.innerHTML = `
+    <div class="card card-interactive hist-entry stagger" data-action="open-history" role="button" tabindex="0" aria-label="Open History — your journey, day by day">
+      <span class="hist-entry-icon">${ui.icon('calendar', 20)}</span>
+      <div class="grow">
+        <div style="font-size:15px;font-weight:700">Your Journey</div>
+        <div class="muted" style="font-size:var(--fs-sm);font-weight:600">Your journey, day by day.</div>
+      </div>
+      ${ui.icon('chevron-right', 18)}
+    </div>`;
+  // Keyboard parity with the tap/click path.
+  node.querySelector('.hist-entry').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      go('history');
+    }
+  });
 }
 
 function renderGoalsCard(root, state) {

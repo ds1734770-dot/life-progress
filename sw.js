@@ -3,7 +3,7 @@
  * Precaches the core assets at install time and serves them cache-first.
  * Cross-origin requests and data URLs are never cached or intercepted.
  */
-const CACHE = 'life-progress-v1.5';
+const CACHE = 'life-progress-v1.6';
 
 // Relative URLs (no leading slash) so the app deploys at a domain root OR a
 // subpath (e.g. GitHub Pages project sites) without changes.
@@ -27,6 +27,7 @@ const CORE_ASSETS = [
   './js/photos.js',
   './js/journal.js',
   './js/router.js',
+  './js/history.js',
   './js/tabbar-dock.js',
   './js/onboarding.js',
   './js/launch.js',
@@ -38,6 +39,7 @@ const CORE_ASSETS = [
   './js/screens/gym.js',
   './js/screens/photos.js',
   './js/screens/journal.js',
+  './js/screens/history.js',
   './js/screens/settings.js',
   './js/screens/avatar.js',
   './icons/icon-192.png',

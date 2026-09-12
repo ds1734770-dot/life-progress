@@ -683,3 +683,256 @@
 .avatar-choice-row .btn {
   flex: 1;
 }
+
+/* ===========================================================================
+   History / Calendar (V1.2 Phase 1)
+   Colors map to existing theme tokens so light/dark themes stay consistent:
+   water → --info, gym → --accent, goals → --success, journal → --warning.
+   =========================================================================== */
+
+.hist-card {
+  padding: var(--sp-4);
+}
+
+/* Dashboard “Your Journey” entry card. */
+.hist-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin-top: var(--sp-5);
+}
+.hist-entry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.hist-entry-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.hist-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.hist-month {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: center;
+  flex: 1;
+}
+
+.hist-today {
+  display: block;
+  margin: 2px auto 0;
+}
+
+.hist-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-top: var(--sp-3);
+}
+
+.hist-dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.hist-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  row-gap: 2px;
+}
+
+.hist-day {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 0 5px;
+  min-height: 44px; /* thumb-friendly touch target */
+  border-radius: 12px;
+  transition: background var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease), transform var(--d-fast) var(--spring);
+}
+.hist-day:active {
+  transform: scale(0.94);
+}
+.hist-day:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.hist-daynum {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.hist-day.out {
+  opacity: 0.32;
+}
+
+/* Today: ring outline — distinct from the selected fill. */
+.hist-day.is-today .hist-daynum {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  color: var(--accent);
+  font-weight: 800;
+}
+
+/* Selected: soft accent fill — the strongest state. */
+.hist-day.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.hist-day.is-selected .hist-daynum {
+  font-weight: 800;
+}
+
+.hist-dots {
+  display: flex;
+  gap: 3px;
+  min-height: 5px;
+}
+
+.hist-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.dot-water { background: var(--info); }
+.dot-gym { background: var(--accent); }
+.dot-goals { background: var(--success); }
+.dot-journal { background: var(--warning); }
+
+.hist-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-3) var(--sp-4);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--surface-3);
+}
+
+.hist-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.hist-details {
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.hist-detail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+}
+.hist-detail-row + .hist-detail-row {
+  border-top: 1px solid var(--surface-3);
+}
+
+.hist-detail-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.hist-detail-row:nth-child(1) .hist-detail-icon { background: color-mix(in srgb, var(--info) 12%, transparent); color: var(--info); }
+.hist-detail-row:nth-child(2) .hist-detail-icon { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.hist-detail-row:nth-child(3) .hist-detail-icon { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
+.hist-detail-row:nth-child(4) .hist-detail-icon { background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
+
+.hist-detail-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.hist-detail-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.hist-detail-value {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.hist-detail-row .hist-dot {
+  opacity: 0.25;
+}
+.hist-detail-row.has-activity .hist-dot {
+  opacity: 1;
+}
+
+/* Reduced motion: keep state changes, drop decorative movement. */
+@media (prefers-reduced-motion: reduce) {
+  .hist-day,
+  .hist-day:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* Small screens: reclaim page padding for the 7-column grid so day cells
+   keep a comfortable touch target. The card still keeps a small margin and
+   its own inner padding, so the grid never touches the screen edge. */
+@media (max-width: 360px) {
+  .hist-card {
+    margin-left: calc(var(--sp-3) * -1);
+    margin-right: calc(var(--sp-3) * -1);
+    padding-left: var(--sp-2);
+    padding-right: var(--sp-2);
+  }
+  .hist-day {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .hist-daynum {
+    width: 28px;
+    height: 28px;
+  }
+}
