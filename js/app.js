@@ -11,6 +11,7 @@ import { loadSettings, getSettings, onSystemThemeChange } from './settings.js';
 import { navigate, renderTabbar, currentRouteName } from './router.js';
 import { showOnboarding } from './onboarding.js';
 import { playLaunchExperience } from './launch.js';
+import { checkAchievementsNow } from './celebration.js';
 
 async function boot() {
   try {
@@ -37,6 +38,11 @@ async function boot() {
 
   await navigate(currentRouteName());
   registerServiceWorker();
+
+  // V1.2 Phase 2 — startup achievement evaluation, run AFTER first paint so
+  // boot is never delayed. Newly earned badges are persisted (earns are
+  // permanent) and celebrated once; unseen celebrations re-queue next start.
+  checkAchievementsNow();
 }
 
 function registerServiceWorker() {

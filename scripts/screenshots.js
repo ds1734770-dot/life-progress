@@ -201,6 +201,41 @@ try {
   await sleep(400);
   await shot('history-day-details');
 
+  // Achievements (V1.2 Phase 2): cabinet, detail sheet, unlock celebration.
+  await evaluate(`location.hash = '#/achievements'`);
+  await waitFor(`document.querySelector('.ach-grid') !== null`, 8000);
+  await sleep(500);
+  await shot('achievements-cabinet');
+  await evaluate(`document.querySelector('.ach-card.unlocked')?.click(); true`);
+  await waitFor(`document.querySelector('.ach-detail .ach-detail-title') !== null`, 6000);
+  await sleep(400);
+  await shot('achievements-badge-detail');
+  await evaluate(`document.querySelector('.ach-detail [data-detail-close]')?.click(); true`);
+  await sleep(400);
+  await evaluate(`document.querySelector('.ach-card.locked')?.click(); true`);
+  await waitFor(`document.querySelector('.ach-detail .ach-detail-title') !== null`, 6000);
+  await sleep(400);
+  await shot('achievements-badge-locked');
+  await evaluate(`document.querySelector('.ach-detail [data-detail-close]')?.click(); true`);
+  await sleep(400);
+  // Celebration replay: clear the seen-set, then queue the first badge the
+  // seeded data has ACTUALLY earned — the captured moment stays honest.
+  await evaluate(`(async () => {
+    const A = await import('/js/achievements.js');
+    const c = await import('/js/celebration.js');
+    localStorage.removeItem('achievements-celebrated');
+    const data = await (await import('/js/history.js')).loadHistoryData();
+    const { earnedNew, progress } = A.evaluateAchievements(data, []);
+    const target = earnedNew[0] || A.ACHIEVEMENTS[0];
+    c.queueCelebration({ achievement: target, progress: progress.get(target.id), next: A.nextMilestone(target.id, progress), earnedAt: Date.now() });
+    return { queued: c.pendingCelebrationCount(), badge: target.id };
+  })()`);
+  await waitFor(`!!document.querySelector('.celebration-backdrop')`, 8000);
+  await sleep(1200); // let the reveal animation reach its settled state
+  await shot('achievements-celebration');
+  await evaluate(`document.querySelector('.celebration-backdrop [data-celebration="close"]')?.click(); true`);
+  await sleep(400);
+
   // Narrow-viewport dock (320px) — compact fit, no clipping.
   await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 2, mobile: true });
   await sleep(600);

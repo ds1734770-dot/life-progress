@@ -4,6 +4,7 @@
  */
 import { getSettings, saveSettings } from '../settings.js';
 import * as gym from '../gym.js';
+import { checkAchievementsNow } from '../celebration.js';
 import { gymWeightUnit } from '../models.js';
 import * as photos from '../photos.js';
 import { WORKOUT_TYPES } from '../models.js';
@@ -228,6 +229,7 @@ function openWorkoutSheet(root, state) {
         exercises,
       });
       state.workouts = gym.sortWorkouts([workout, ...state.workouts]);
+      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       ui.haptic();
       ui.toast('Workout saved', 'success');
       close();

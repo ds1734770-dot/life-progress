@@ -4,6 +4,7 @@
  */
 import { getSettings } from '../settings.js';
 import * as journal from '../journal.js';
+import { checkAchievementsNow } from '../celebration.js';
 import { MOODS } from '../models.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
@@ -209,6 +210,7 @@ function renderEditor(root, entry) {
         .map((t) => t.trim())
         .filter(Boolean);
       await journal.saveEntry({ id: entry?.id, title, content, mood, tags, date: entry?.date || todayKey() });
+      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       ui.haptic(20);
       ui.toast(isEdit ? 'Entry updated' : 'Entry saved', 'success');
       go('journal');

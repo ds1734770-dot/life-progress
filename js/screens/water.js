@@ -5,6 +5,7 @@
  */
 import { saveSettings } from '../settings.js';
 import * as water from '../water.js';
+import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
 import { todayKey, formatWater, formatClock, formatDate } from '../utils.js';
 
@@ -213,6 +214,7 @@ function bindActions(root, entries) {
 
 async function addAndRefresh(root, amount) {
   await water.addWater(amount);
+  checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
   ui.haptic();
   const entries = await water.getAllEntries();
   const unit = water.waterUnit();

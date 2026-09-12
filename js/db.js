@@ -7,7 +7,9 @@
  */
 
 const DB_NAME = 'life-progress-db';
-const DB_VERSION = 1;
+// V2: adds achievementRecords (V1.2 Phase 2). Older databases upgrade in
+// place via onupgradeneeded; existing stores and their data are untouched.
+const DB_VERSION = 2;
 
 export const STORES = Object.freeze({
   settings: 'settings',
@@ -16,6 +18,7 @@ export const STORES = Object.freeze({
   workouts: 'workouts',
   progressPhotos: 'progressPhotos',
   journalEntries: 'journalEntries',
+  achievementRecords: 'achievementRecords',
 });
 
 export const ALL_STORES = Object.values(STORES);

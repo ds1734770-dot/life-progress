@@ -4,6 +4,7 @@
  */
 import { getSettings, saveSettings } from '../settings.js';
 import * as goals from '../goals.js';
+import { checkAchievementsNow } from '../celebration.js';
 import { GOAL_TYPES, GOAL_CATEGORIES, GOAL_PRIORITIES } from '../models.js';
 import * as ui from '../ui.js';
 import { todayKey, formatDate, addDays, startOfWeekKey, formatMonth } from '../utils.js';
@@ -103,6 +104,7 @@ function render(root, state) {
       if (!goal) return;
       const completing = !goals.isCompletedOn(goal);
       await goals.setGoalCompleted(goal, completing);
+      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       ui.haptic();
       render(root, state);
       if (completing) {

@@ -3,6 +3,7 @@
  * and safe data controls (export / import / clear with confirmation).
  */
 import { getSettings, saveSettings, loadSettings, resetSettings } from '../settings.js';
+import { ACHIEVEMENTS, loadAchievementRecords } from '../achievements.js';
 import * as photos from '../photos.js';
 import { dbExportAll, dbImportAll, dbResetAll } from '../db.js';
 import { themeOptions, WORKOUT_TYPES } from '../models.js';
@@ -14,6 +15,19 @@ export async function mount(root, params) {
   photos.revokePhotoUrls();
   const settings = getSettings();
   render(root, settings);
+  refreshAchievementsSub(root);
+}
+
+/** Live "n of N unlocked" on the Achievements row (async, non-blocking). */
+async function refreshAchievementsSub(root) {
+  try {
+    const records = await loadAchievementRecords();
+    const known = new Set(records.map((r) => r.id));
+    const sub = root.querySelector('#ach-settings-sub');
+    if (sub) sub.textContent = `${known.size} of ${ACHIEVEMENTS.length} unlocked · View your accomplishments`;
+  } catch {
+    /* row keeps its static subtitle */
+  }
 }
 
 function render(root, settings) {
@@ -170,6 +184,20 @@ function render(root, settings) {
     </section>
 
     <section class="section stagger">
+      <h3 class="section-title" style="font-size:var(--fs-lg)">Progress</h3>
+      <div class="settings-group">
+        <div class="settings-row pressable" data-action="open-achievements">
+          <div class="settings-row-icon" style="background:color-mix(in srgb,var(--warning) 14%,transparent);color:var(--warning)">${ui.icon('star', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Achievements &amp; Badges</div>
+            <div class="settings-row-sub" id="ach-settings-sub">View your accomplishments</div>
+          </div>
+          ${ui.icon('chevron-right', 18)}
+        </div>
+      </div>
+    </section>
+
+    <section class="section stagger">
       <h3 class="section-title" style="font-size:var(--fs-lg)">Data</h3>
       <div class="settings-group">
         <div class="settings-row pressable" data-action="export-data">
@@ -215,6 +243,7 @@ function render(root, settings) {
 
   ui.bindActions(root, {
     'open-avatar': () => go('avatar'),
+    'open-achievements': () => go('achievements'),
     'edit-name': () => openNameDialog(root),
     'edit-quote': () => openQuoteEditor(root),
     theme: (d) => {

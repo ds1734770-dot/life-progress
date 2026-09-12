@@ -17,6 +17,7 @@ import * as gym from '../gym.js';
 import * as journal from '../journal.js';
 import * as photos from '../photos.js';
 import * as history from '../history.js';
+import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
 import {
@@ -106,6 +107,7 @@ export async function mount(root, params) {
       if (!goal) return;
       ui.haptic();
       await goals.setGoalCompleted(goal, goal.status !== 'completed');
+      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       refreshSections(root, ['progress', 'goals']);
       if (goal.status === 'completed') ui.toast('Goal completed', 'success');
     },
@@ -429,6 +431,7 @@ function openQuickWaterSheet(root) {
     const chips = wrap.querySelector('.chip-grid');
     const add = async (amount) => {
       await water.addWater(amount);
+      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       ui.haptic();
       ui.toast(`+${amount} ml added`, 'success');
       const fresh = await loadState();

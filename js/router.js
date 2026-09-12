@@ -12,6 +12,7 @@ import { mount as mountGoals } from './screens/goals.js';
 import { mount as mountJournal } from './screens/journal.js';
 import { mount as mountHistory } from './screens/history.js';
 import { mount as mountSettings } from './screens/settings.js';
+import { mount as mountAchievements } from './screens/achievements.js';
 import { mount as mountAvatar } from './screens/avatar.js';
 import { mount as mountPhotos } from './screens/photos.js';
 import { icon } from './ui.js';
@@ -33,6 +34,7 @@ const SCREENS = {
   goals: { mount: mountGoals },
   journal: { mount: mountJournal },
   history: { mount: mountHistory },
+  achievements: { mount: mountAchievements },
   settings: { mount: mountSettings },
   avatar: { mount: mountAvatar },
   photos: { mount: mountPhotos },
