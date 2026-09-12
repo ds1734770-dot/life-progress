@@ -118,6 +118,24 @@ export function calculateStreak(dateKeys, today = todayKey()) {
   return streak;
 }
 
+/**
+ * Longest consecutive run within `dateKeys` (order-independent, de-duplicated).
+ * Pairs with `calculateStreak` (current streak) so a "best streak" needs no
+ * second algorithm — just the same set of day keys, scanned once.
+ */
+export function calculateBestStreak(dateKeys) {
+  const days = [...new Set(dateKeys)].sort();
+  let best = 0;
+  let run = 0;
+  let prev = null;
+  for (const key of days) {
+    run = prev !== null && addDays(prev, 1) === key ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = key;
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // Overall daily progress.
 //

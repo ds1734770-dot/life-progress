@@ -184,6 +184,23 @@ try {
   await sleep(500);
   await shot('dock-focus-settings');
 
+  // History (V1.2): category views + streak card states.
+  await evaluate(`location.hash = '#/history'`);
+  await waitFor(`document.querySelector('.hist-grid') !== null`, 8000);
+  await sleep(500);
+  await shot('history-all');
+  await evaluate(`document.querySelector('.hist-chip[data-category="water"]')?.click(); true`);
+  await sleep(400);
+  await shot('history-water');
+  await evaluate(`document.querySelector('.hist-chip[data-category="gym"]')?.click(); true`);
+  await sleep(400);
+  await shot('history-gym');
+  await evaluate(`document.querySelector('.hist-chip[data-category="all"]')?.click(); true`);
+  await sleep(400);
+  await evaluate(`document.querySelector('.hist-grid .hist-day[data-state="completed"]')?.click(); true`);
+  await sleep(400);
+  await shot('history-day-details');
+
   // Narrow-viewport dock (320px) — compact fit, no clipping.
   await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 2, mobile: true });
   await sleep(600);

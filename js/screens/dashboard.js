@@ -16,6 +16,7 @@ import * as goals from '../goals.js';
 import * as gym from '../gym.js';
 import * as journal from '../journal.js';
 import * as photos from '../photos.js';
+import * as history from '../history.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
 import {
@@ -181,7 +182,7 @@ async function refreshSections(root, which) {
 function updateSections(root, state, only = null) {
   const updaters = {
     progress: () => renderProgressCard(root, state),
-    history: () => renderHistoryCard(root),
+    history: () => renderHistoryCard(root, state),
     goals: () => renderGoalsCard(root, state),
     water: () => renderWaterCard(root, state),
     gym: () => renderGymCard(root, state),
@@ -234,16 +235,24 @@ function renderProgressCard(root, state) {
   ui.animateCount(node.querySelector('#dash-pct'), pct, { format: (n) => `${Math.round(n)}%` });
 }
 
-function renderHistoryCard(root) {
+function renderHistoryCard(root, state) {
   const node = root.querySelector('#card-history');
   if (!node) return; // screen was replaced mid-render
+  // Small motivational preview: overall consistency streak (all-category
+  // completion days), only when it is alive — quiet otherwise, never clutter.
+  const streak = history.computeStreaks('all', state, todayKey());
+  const pill =
+    streak.current > 0
+      ? `<span class="pill pill-accent hist-entry-streak">${ui.icon('flame', 12)} ${streak.current} day${streak.current === 1 ? '' : 's'}</span>`
+      : '';
   node.innerHTML = `
-    <div class="card card-interactive hist-entry stagger" data-action="open-history" role="button" tabindex="0" aria-label="Open History — your journey, day by day">
+    <div class="card card-interactive hist-entry stagger" data-action="open-history" role="button" tabindex="0" aria-label="Open History — your journey, day by day${streak.current > 0 ? `. Current streak ${streak.current} days` : ''}">
       <span class="hist-entry-icon">${ui.icon('calendar', 20)}</span>
       <div class="grow">
         <div style="font-size:15px;font-weight:700">Your Journey</div>
         <div class="muted" style="font-size:var(--fs-sm);font-weight:600">Your journey, day by day.</div>
       </div>
+      ${pill}
       ${ui.icon('chevron-right', 18)}
     </div>`;
   // Keyboard parity with the tap/click path.

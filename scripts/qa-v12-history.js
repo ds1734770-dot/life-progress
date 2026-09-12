@@ -243,10 +243,11 @@ const SEED = `(async () => {
   // can never fall inside the current month's 6-row grid window.
   const prevMonthDay = fmt(new Date(now.getFullYear(), now.getMonth() - 1, 10));
 
+  const TARGET = 3000; // default water target (settings are untouched)
   const waterEntries = [
-    makeWaterEntry(500, at(today, 8)), makeWaterEntry(250, at(today, 9)),
-    makeWaterEntry(750, at(shift(-1), 10)),
-    makeWaterEntry(300, at(prevMonthDay, 11)),
+    makeWaterEntry(500, at(today, 8)), makeWaterEntry(250, at(today, 9)), // 750 → partial
+    makeWaterEntry(750, at(shift(-1), 10)), makeWaterEntry(TARGET, at(shift(-1), 11)), // 3750 → completed
+    makeWaterEntry(300, at(prevMonthDay, 11)), makeWaterEntry(TARGET, at(prevMonthDay, 12)), // 3300 → completed
   ];
   const workouts = [
     makeWorkout({ date: today, workoutType: 'Strength', duration: 45, exercises: [{ name: 'Bench Press', sets: 3, reps: 8, weight: 60 }] }),
@@ -258,8 +259,9 @@ const SEED = `(async () => {
     makeJournalEntry({ title: 'Old note', content: 'Reflecting.', date: prevMonthDay, createdAt: at(prevMonthDay, 20) }),
   ];
   const goalList = [
-    makeGoal({ title: 'Morning stretch', type: 'daily', startDate: shift(-14), endDate: shift(14), completedDays: [today, shift(-1)] }),
-    makeGoal({ title: 'Read a book', type: 'custom', startDate: shift(-30), endDate: shift(30), completedDays: [shift(-3)] }),
+    makeGoal({ title: 'Morning stretch', type: 'daily', startDate: shift(-14), endDate: shift(14), completedDays: [today, shift(-1), shift(-3)] }),
+    // Range starts −5d so the quiet-day check (−7d) stays outside it.
+    makeGoal({ title: 'Read a book', type: 'custom', status: 'completed', startDate: shift(-5), endDate: shift(30), completedDays: [shift(-3)] }),
   ];
 
   await dbBulkPut('waterEntries', waterEntries);
@@ -302,7 +304,7 @@ try {
   await evaluate(`location.hash = '#/dashboard'; true`);
   await waitFor(`document.querySelector('#card-history .hist-entry') !== null`, 8000, 'dashboard re-render after seed');
   const histCount = await evalAsync(HIST);
-  check('seeded records are in the stores (aggregation reads them all)', histCount.count === 11, JSON.stringify(histCount));
+  check('seeded records are in the stores (aggregation reads them all)', histCount.count === 13, JSON.stringify(histCount));
 
   // Dashboard entry card click → #/history.
   await click('#card-history .hist-entry');
@@ -334,25 +336,112 @@ try {
   check('month header shows the current month/year', cal.monthLabel === new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), cal.monthLabel);
   check('out-month days are visually de-emphasised', await evaluate(`document.querySelectorAll('.hist-grid .hist-day.out').length > 0`));
 
-  console.log('\n— Activity dots on seeded days —');
-  const dots = await evalAsync(`(async () => {
-    const sel = (k) => document.querySelector('.hist-grid .hist-day[data-date="' + k + '"]');
-    const dotCount = (k) => sel(k) ? sel(k).querySelectorAll('.hist-dots .hist-dot').length : -1;
-    const t = ${JSON.stringify(seedInfo.today)};
-    const y = ${JSON.stringify(seedInfo.prevMonthDay)};
+  console.log('\n— Category selector (All / Water / Gym / Goals / Journal) —');
+  const chips = await evalAsync(`(async () => {
+    const chips = [...document.querySelectorAll('.hist-chip')];
     return {
-      today: dotCount(t),          // water + gym + goals + journal = 4
-      yesterday: dotCount(${JSON.stringify(shiftKey(-1))}), // water + goals = 2
-      minus3: dotCount(${JSON.stringify(shiftKey(-3))}),   // gym + goals = 2
-      oldMonth: dotCount(y),       // water + gym + journal = 3
-      empty: dotCount(${JSON.stringify(shiftKey(-7))}),    // nothing = 0
+      labels: chips.map((c) => c.textContent.trim()),
+      count: chips.length,
+      allSelected: chips.find((c) => c.dataset.category === 'all')?.getAttribute('aria-selected'),
+      tablist: document.querySelector('.hist-chips')?.getAttribute('role'),
+      scrollable: document.querySelector('.hist-chips').scrollWidth >= document.querySelector('.hist-chips').clientWidth,
     };
   })()`);
-  check('day with all four activities shows 4 dots', dots.today === 4, JSON.stringify(dots));
-  check('day with water+goals shows 2 dots', dots.yesterday === 2, JSON.stringify(dots));
-  check('day with gym+goals shows 2 dots', dots.minus3 === 2, JSON.stringify(dots));
-  check('previous-month day is outside the 42-cell window', dots.oldMonth === -1, JSON.stringify(dots));
-  check('quiet day renders no dots', dots.empty === 0, JSON.stringify(dots));
+  check('category selector shows all five views as tabs', chips.count === 5 && chips.tablist === 'tablist', JSON.stringify(chips));
+  check('All is selected by default', chips.allSelected === 'true');
+  check('no page overflow from the selector', await evaluate(`document.documentElement.scrollWidth <= window.innerWidth + 1`));
+
+  // Switch to Water — header, tagline and streak card must follow; the
+  // visible month and selected day must NOT reset.
+  await click('.hist-chip[data-category="water"]');
+  await sleep(300);
+  const waterView = await evalAsync(`(async () => ({
+    title: document.getElementById('hist-title')?.textContent,
+    tagline: document.getElementById('hist-tagline')?.textContent,
+    month: document.getElementById('hist-month')?.textContent,
+    selected: document.querySelector('.hist-grid .hist-day.is-selected')?.dataset.date,
+    waterSelected: document.querySelector('.hist-chip[data-category="water"]')?.getAttribute('aria-selected'),
+    streakNum: document.querySelector('.hist-streak-num')?.textContent?.trim(),
+    best: document.querySelector('.hist-streak-best')?.textContent?.trim(),
+    msg: document.querySelector('.hist-streak-msg')?.textContent,
+    detailLabels: [...document.querySelectorAll('.hist-detail-label')].map((n) => n.textContent),
+    detailStreak: document.querySelector('.hist-detail-streak')?.textContent || null,
+  }))()`);
+  check('Water view updates the category header', waterView.title === 'Water History' && waterView.tagline === 'Keep the hydration going.', JSON.stringify({ title: waterView.title, tagline: waterView.tagline }));
+  check('Water view keeps the visible month (category ≠ month reset)', waterView.month === new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), waterView.month);
+  check('Water view keeps the selected day', waterView.selected === seedInfo.today, waterView.selected);
+  check('water chip becomes the selected tab', waterView.waterSelected === 'true');
+  check('streak card shows the water streak (current + best)',
+    /^\d+/.test(waterView.streakNum || '') && /best/.test(waterView.best || ''), JSON.stringify({ streakNum: waterView.streakNum, best: waterView.best }));
+  check('water details show only the water row (context-aware)',
+    waterView.detailLabels.length === 1 && waterView.detailLabels[0] === 'Water', JSON.stringify(waterView.detailLabels));
+  check('water details include the current-streak line', (waterView.detailStreak || '').includes('Current streak'), waterView.detailStreak);
+  check('motivational message is present', (waterView.msg || '').length > 5, waterView.msg);
+
+  console.log('\n— Completion marks on the calendar (checkmarks, not dots) —');
+  // Back to All for the honest mixed-state checks, then per-category ✓s.
+  await click('.hist-chip[data-category="all"]');
+  await sleep(250);
+  const marks = await evalAsync(`(async () => {
+    const sel = (k) => document.querySelector('.hist-grid .hist-day[data-date="' + k + '"]');
+    const state = (k) => sel(k)?.dataset.state;
+    const doneCount = (k) => sel(k) ? sel(k).querySelectorAll('.hist-mark.mark-done').length : -1;
+    const partialCount = (k) => sel(k) ? sel(k).querySelectorAll('.hist-mark.mark-partial').length : -1;
+    return {
+      minus1: { state: state(${JSON.stringify(shiftKey(-1))}), done: doneCount(${JSON.stringify(shiftKey(-1))}) },      // water✓ goals✓ → all completed
+      minus3: { state: state(${JSON.stringify(shiftKey(-3))}), done: doneCount(${JSON.stringify(shiftKey(-3))}) },      // water✓ gym✓ goals✓ → completed
+      today: { state: state(${JSON.stringify(seedInfo.today)}), partial: partialCount(${JSON.stringify(seedInfo.today)}) }, // water partial → partial
+      minus7: state(${JSON.stringify(shiftKey(-7))}),                                                                  // nothing → empty
+      chain: document.querySelectorAll('.hist-grid .hist-day.in-chain').length,
+    };
+  })()`);
+  check('completed day carries a real checkmark mark', marks.minus1.state === 'completed' && marks.minus1.done === 1, JSON.stringify(marks.minus1));
+  check('second completed day also marked with a checkmark (chain)', marks.minus3.state === 'completed' && marks.minus3.done === 1, JSON.stringify(marks.minus3));
+  check('partial day shows the subtle partial ring, never a fake ✓', marks.today.state === 'partial' && marks.today.partial === 1, JSON.stringify(marks.today));
+  check('empty day has no mark and no state', marks.minus7 === 'empty', marks.minus7);
+  check('consecutive completed days share the chain tint', marks.chain >= 2, String(marks.chain));
+
+  // Water category: completed vs partial vs empty days.
+  await click('.hist-chip[data-category="water"]');
+  await sleep(250);
+  const waterMarks = await evalAsync(`(async () => ({
+    minus1: document.querySelector('.hist-grid .hist-day[data-date="${shiftKey(-1)}"]')?.dataset.state,
+    today: document.querySelector('.hist-grid .hist-day[data-date="${seedInfo.today}"]')?.dataset.state,
+    minus7: document.querySelector('.hist-grid .hist-day[data-date="${shiftKey(-7)}"]')?.dataset.state,
+  }))()`);
+  check('water calendar: target reached → completed', waterMarks.minus1 === 'completed', JSON.stringify(waterMarks));
+  check('water calendar: logged but below target → partial', waterMarks.today === 'partial', JSON.stringify(waterMarks));
+  check('water calendar: no entries → empty', waterMarks.minus7 === 'empty', JSON.stringify(waterMarks));
+
+  // Gym + Journal categories: logged days are completed, quiet days empty.
+  await click('.hist-chip[data-category="gym"]');
+  await sleep(250);
+  const gymState = await evaluate(`document.querySelector('.hist-grid .hist-day[data-date="${shiftKey(-3)}"]')?.dataset.state`);
+  await click('.hist-chip[data-category="journal"]');
+  await sleep(250);
+  const journalState = await evaluate(`document.querySelector('.hist-grid .hist-day[data-date="${seedInfo.today}"]')?.dataset.state`);
+  check('gym calendar: workout day completed, others empty', gymState === 'completed', String(gymState));
+  check('journal calendar: entry day completed', journalState === 'completed', String(journalState));
+
+  console.log('\n— Streak card numbers match the domain layer —');
+  const streakQA = await evalAsync(`(async () => {
+    const h = await import('/js/history.js');
+    const data = await h.loadHistoryData();
+    const out = {};
+    for (const c of ['all', 'water', 'gym', 'goals', 'journal']) {
+      out[c] = h.computeStreaks(c, data);
+    }
+    return out;
+  })()`);
+  await click('.hist-chip[data-category="water"]');
+  await sleep(250);
+  const shownWater = await evaluate(`document.querySelector('.hist-streak-num')?.textContent?.trim()`);
+  check('water streak card matches computeStreaks(water)', (shownWater || '').startsWith(String(streakQA.water.current)), `ui=${shownWater} domain=${streakQA.water.current}`);
+  await click('.hist-chip[data-category="all"]');
+  await sleep(250);
+  const shownAll = await evaluate(`document.querySelector('.hist-streak-num')?.textContent?.trim()`);
+  check('All streak card matches computeStreaks(all)', (shownAll || '').startsWith(String(streakQA.all.current)), `ui=${shownAll} domain=${streakQA.all.current}`);
+  check('best streak is shown and ≥ current streak', streakQA.all.best >= streakQA.all.current, JSON.stringify(streakQA.all));
 
   console.log('\n— Day details (selected day = today) —');
   const det = await evalAsync(`(async () => {
@@ -368,11 +457,12 @@ try {
   check('details header includes Today', det.title.includes('Today'), det.title);
   check('water summary shows the exact total (500+250)', det.water?.startsWith('750'), det.water);
   check('gym summary shows the workout type and duration', det.gym?.includes('Strength') && det.gym?.includes('45'), det.gym);
-  // Both goals (daily + custom in range) are in today's bucket; only the
-  // daily one is completed — matching the dashboard's completion semantics.
-  check('goals summary counts 1 of 2 goals completed today', det.goals?.includes('1 of 2'), det.goals);
+  // Both goals (daily + custom in range) are in today's bucket and both are
+  // completed — a completed custom goal counts on every day in its range
+  // (existing isCompletedOn semantics, same as the dashboard's Today view).
+  check('goals summary counts 2 of 2 goals completed today', det.goals?.includes('2 of 2'), det.goals);
   check('journal summary counts 1 entry', det.journal === '1 entry', det.journal);
-  check('active-day pill reports 4 of 4 categories', det.pill.includes('4'), det.pill);
+  check('partial day details pill says Partial (honest, not completed)', det.pill.includes('Partial'), det.pill);
 
   console.log('\n— Selecting a quiet day shows honest empty states —');
   await evaluate(`document.querySelector('.hist-grid .hist-day[data-date="${shiftKey(-7)}"]')?.click(); true`);
@@ -404,8 +494,13 @@ try {
   // Seed a day in the previous month, navigate there, check dots + details.
   await evaluate(`document.querySelector('[data-action="prev-month"]')?.click(); true`);
   await sleep(300);
-  const oldMonthDots = await evaluate(`document.querySelector('.hist-grid .hist-day[data-date="${seedInfo.prevMonthDay}"]')?.querySelectorAll('.hist-dot').length`);
-  check('previous-month seeded day shows its 3 dots (water+gym+journal)', oldMonthDots === 3, String(oldMonthDots));
+  // In the All view a completed day carries ONE checkmark (not per-category
+  // dots); the old water+gym+journal activity aggregates into that state.
+  const oldMonthState = await evalAsync(`(async () => {
+    const cell = document.querySelector('.hist-grid .hist-day[data-date="${seedInfo.prevMonthDay}"]');
+    return { state: cell?.dataset.state, checks: cell?.querySelectorAll('.hist-mark.mark-done').length };
+  })()`);
+  check('previous-month seeded day shows the completed checkmark', oldMonthState.state === 'completed' && oldMonthState.checks === 1, JSON.stringify(oldMonthState));
   await evaluate(`document.querySelector('.hist-grid .hist-day[data-date="${seedInfo.prevMonthDay}"]')?.click(); true`);
   await sleep(250);
   const oldDet = await evalAsync(`(async () => {
@@ -462,8 +557,8 @@ try {
 
   await evaluate(`location.hash = '#/history'; true`);
   await waitFor(`document.querySelector('.hist-grid') !== null`, 8000, 'history after wipe');
-  const wipedDots = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-dot').length`);
-  check('history is empty after a wipe (derived, no stale cache)', wipedDots === 0, String(wipedDots));
+  const wipedMarks = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-mark').length`);
+  check('history is empty after a wipe (derived, no stale cache)', wipedMarks === 0, String(wipedMarks));
 
   await evaluate(`location.hash = '#/settings'`);
   await waitFor(`document.querySelector('[data-action="import-data"]') !== null`, 6000, 'settings for import');
@@ -474,8 +569,8 @@ try {
   await waitFor(`document.querySelector('#dash-hero') !== null || document.querySelector('.settings-list') !== null`, 10000, 'after import');
   await evaluate(`location.hash = '#/history'; true`);
   await waitFor(`document.querySelector('.hist-grid') !== null`, 8000, 'history after import');
-  const importedDots = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-dot').length`);
-  check('history reflects imported data (dots return)', importedDots > 0, String(importedDots));
+  const importedMarks = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-mark').length`);
+  check('history reflects imported data (completion marks return)', importedMarks > 0, String(importedMarks));
 
   console.log('\n— Layout: widths, themes, reduced motion, console —');
   for (const w of [320, 360, 390, 412, 1024]) {
@@ -526,8 +621,8 @@ try {
     await waitFor(launchOverlayGone, 9000, 'offline launch overlay leaves');
     await evaluate(`location.hash = '#/history'; true`);
     await waitFor(`document.querySelector('.hist-grid') !== null`, 10000, 'history offline');
-    const offlineDots = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-dot').length`);
-    check('history renders offline from IndexedDB (derived layer works)', offlineDots > 0, String(offlineDots));
+    const offlineMarks = await evaluate(`document.querySelectorAll('.hist-grid .hist-day .hist-mark').length`);
+    check('history renders offline from IndexedDB (derived layer works)', offlineMarks > 0, String(offlineMarks));
   }
   serverBack = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
   await sleep(500);

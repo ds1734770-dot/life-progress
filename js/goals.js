@@ -114,7 +114,13 @@ export function filterGoals(goals, filter, key = todayKey()) {
  * their streak across resets, and legacy records still count.
  * `today` is injectable for deterministic tests (defaults to the real day).
  */
-export function goalStreak(goals, today = todayKey()) {
+/**
+ * All local date keys on which ANY goal recorded a completion (recurring
+ * completedDays plus the legacy completedAt timestamp, de-duplicated). Shared
+ * by goalStreak and the History aggregation so "completed on day X" means
+ * the same thing everywhere.
+ */
+export function goalCompletionDays(goals) {
   const days = new Set();
   for (const g of goals) {
     if (g.completedDays?.length) {
@@ -123,7 +129,11 @@ export function goalStreak(goals, today = todayKey()) {
       days.add(dateKey(new Date(g.completedAt))); // legacy pre-history record
     }
   }
-  return calculateStreak([...days], today);
+  return [...days];
+}
+
+export function goalStreak(goals, today = todayKey()) {
+  return calculateStreak(goalCompletionDays(goals), today);
 }
 
 /**

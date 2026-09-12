@@ -15,9 +15,9 @@
  * UTC conversion. `today` is injectable for deterministic tests.
  */
 
-import { addDays, dateKey, todayKey } from './utils.js';
-import { isCompletedOn, inBucketOn } from './goals.js';
-import { totalOn, metDays } from './water.js';
+import { addDays, dateKey, todayKey, calculateStreak, calculateBestStreak } from './utils.js';
+import { isCompletedOn, inBucketOn, goalCompletionDays } from './goals.js';
+import { totalOn, metDays, waterTarget } from './water.js';
 
 // ---------------------------------------------------------------------------
 // Calendar month generation (pure)
@@ -230,6 +230,149 @@ export function dateRangeHistory(startDate, endDate, data, today = todayKey()) {
     if (summary.activityCount > 0) out.push(summary);
   }
   return out;
+}
+
+/**
+ * The calendar views History can show. "all" combines every category;
+ * the rest focus one habit. Fixed display order for the selector.
+ */
+export const CATEGORIES = ['all', 'water', 'gym', 'goals', 'journal'];
+
+/**
+ * Day-level state for a calendar cell, per category. Completion is always
+ * honest — it uses each domain's own definition:
+ *   water   → the daily water target was reached that day (existing metDays)
+ *   gym     → a workout was logged
+ *   goals   → every goal due that day was completed (a completion with no
+ *             due goals also counts; partial = some activity but not all)
+ *   journal → a journal entry exists
+ *   all     → every category that was active that day is complete
+ *             ("completed" = all 4 logged; "partial" = any activity)
+ *
+ * Values: 'completed' | 'partial' | 'empty'.
+ */
+export function completionIndex(data, today = todayKey()) {
+  const idx = new Map();
+  const bump = (key, cat, state) => {
+    if (!idx.has(key)) idx.set(key, { all: 'empty', water: 'empty', gym: 'empty', goals: 'empty', journal: 'empty' });
+    idx.get(key)[cat] = state;
+  };
+
+  // WATER — target-met days (existing semantics) are completed; other days
+  // with entries are partial. Reuses totalsByDay so this is one pass.
+  const totals = new Map();
+  for (const e of data.waterEntries || []) {
+    if (e.date) totals.set(e.date, (totals.get(e.date) || 0) + e.amount);
+  }
+  const target = waterTarget();
+  for (const [key, total] of totals) {
+    bump(key, 'water', total >= target ? 'completed' : 'partial');
+  }
+
+  // GYM — any logged workout is a completed day.
+  for (const w of data.workouts || []) {
+    if (w.date) bump(w.date, 'gym', 'completed');
+  }
+
+  // GOALS — completions recorded on the day (recurring history or legacy
+  // timestamp), judged against the goals that were due that day.
+  const dueCache = new Map();
+  const dueOn = (key) => {
+    if (!dueCache.has(key)) {
+      dueCache.set(key, (data.goals || []).filter((g) => inBucketOn(g, 'daily', key)));
+    }
+    return dueCache.get(key);
+  };
+  for (const key of goalCompletionDays(data.goals || [])) {
+    const due = dueOn(key);
+    const done = due.filter((g) => isCompletedOn(g, key)).length;
+    bump(key, 'goals', due.length === 0 || done === due.length ? 'completed' : 'partial');
+  }
+
+  // JOURNAL — any entry counts as a completed day.
+  for (const e of data.journalEntries || []) {
+    if (e.date) bump(e.date, 'journal', 'completed');
+  }
+
+  // ALL — "completed" only when every active category that day is complete.
+  for (const row of idx.values()) {
+    const cats = ACTIVITY_TYPES.filter((c) => row[c] !== 'empty');
+    row.all = cats.length === 0 ? 'empty' : cats.every((c) => row[c] === 'completed') ? 'completed' : 'partial';
+  }
+
+  void today;
+  return idx;
+}
+
+/**
+ * Current + best streak for one category, reusing the existing domain streak
+ * semantics (calculateStreak with today-or-yesterday grace; no new algorithm).
+ *
+ *   water   → waterStreak (target-met days)
+ *   gym     → workoutStreak (workout days)
+ *   goals   → goalStreak (any goal completion days)
+ *   journal → journalStreak (days with entries)
+ *   all     → consistency streak: a day counts when EVERY category active
+ *             that day is complete (see completionIndex). Documented and
+ *             unit-tested; individual category semantics are untouched.
+ *
+ * Returns { current, best, endingToday } — endingToday tells the UI whether
+ * today is already part of the current streak (drives the motivational line).
+ */
+export function computeStreaks(category, data, today = todayKey()) {
+  let days;
+  switch (category) {
+    case 'water':
+      days = metDays(data.waterEntries || []);
+      break;
+    case 'gym':
+      days = (data.workouts || []).map((w) => w.date).filter(Boolean);
+      break;
+    case 'goals':
+      days = goalCompletionDays(data.goals || []);
+      break;
+    case 'journal':
+      days = [...new Set((data.journalEntries || []).map((e) => e.date).filter(Boolean))];
+      break;
+    case 'all':
+    default: {
+      const idx = completionIndex(data, today);
+      days = [...idx.entries()].filter(([, row]) => row.all === 'completed').map(([key]) => key);
+      break;
+    }
+  }
+  const current = calculateStreak(days, today);
+  return { current, best: calculateBestStreak(days), endingToday: current > 0 && days.includes(today) };
+}
+
+/**
+ * Short, honest, non-guilt motivational line for the current state.
+ * `doneToday` = the selected category is completed today; `alive` = the
+ * category's current streak is > 0. Pure so tests can pin every branch.
+ */
+export function streakMotivation(category, doneToday, alive) {
+  if (category === 'all' && doneToday) return 'Every category done today. Streak alive 🔥';
+  if (category === 'all') return 'Small wins every day become your progress.';
+  if (doneToday) return alive ? 'Streak alive 🔥' : 'Done. Tomorrow it becomes a streak.';
+  if (alive) return 'You’re one action away from keeping your streak going.';
+  return 'Your new streak starts today.';
+}
+
+/** Header + tagline for a category view (see the History screen). */
+export function categoryHeader(category) {
+  switch (category) {
+    case 'water':
+      return { title: 'Water History', tagline: 'Keep the hydration going.' };
+    case 'gym':
+      return { title: 'Gym History', tagline: 'Stronger every day.' };
+    case 'goals':
+      return { title: 'Goals History', tagline: 'One step closer.' };
+    case 'journal':
+      return { title: 'Journal History', tagline: 'Keep showing up for yourself.' };
+    case 'all':
+    default:
+      return { title: 'History', tagline: 'Your journey, day by day.' };
+  }
 }
 
 /**
