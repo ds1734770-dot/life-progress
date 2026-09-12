@@ -376,9 +376,20 @@
    V1.1 — CINEMATIC MOTIVATIONAL LAUNCH EXPERIENCE
    Shown once per app session at boot; never during navigation.
    ============================================================ */
+/* Full-viewport launch experience. dvh/svh track the real visual viewport
+   (toolbars included) so the image reaches every edge with no black strip.
+   100vh is kept as the fallback for older engines. */
+@supports (height: 100dvh) {
+  .launch-screen {
+    height: 100dvh;
+    height: 100svh;
+    inset: 0;
+  }
+}
 .launch-screen {
   position: fixed;
   inset: 0;
+  height: 100vh;
   z-index: calc(var(--z-onboarding) + 10);
   display: flex;
   align-items: center;
@@ -392,16 +403,22 @@
   transform: scale(0.96);
   pointer-events: none;
 }
+/* Full-bleed background image — a real <img> (fixed-attachment backgrounds
+   are unreliable inside mobile viewports and caused the black strips).
+   object-fit: cover guarantees edge-to-edge coverage at any aspect ratio. */
 .launch-bg {
   position: absolute;
   inset: 0;
-  background-size: cover;
-  background-position: center;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
   transform: scale(1.12);
   filter: blur(16px) brightness(0.92);
   opacity: 0;
   transition: opacity 1100ms var(--ease-out), transform 1300ms var(--ease-out), filter 1300ms var(--ease-out);
   will-change: opacity, transform, filter;
+  pointer-events: none;
 }
 .launch-bg.is-in {
   opacity: 1;
@@ -426,7 +443,7 @@
   text-align: center;
   color: #fff;
   max-width: 340px;
-  padding: 0 var(--sp-6);
+  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-6)) var(--sp-6) calc(env(safe-area-inset-bottom, 0px) + var(--sp-6));
 }
 .launch-mark {
   font-family: Georgia, "Times New Roman", serif;

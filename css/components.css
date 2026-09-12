@@ -445,8 +445,10 @@
   white-space: nowrap;
 }
 
-/* Sliding active capsule (V1.1) — one element travelling between tabs,
-   positioned by js/tabbar-dock.js. Transform + width only. */
+/* Sliding active capsule (V1.1) — one decorative element travelling between
+   tabs, positioned by js/tabbar-dock.js. Transform + width only. The capsule
+   is a low-opacity glass tint, never a solid block: the visual hierarchy is
+   ICON > LABEL > CAPSULE — the icon always stays fully readable on top. */
 .tab-capsule {
   position: absolute;
   top: 4px;
@@ -454,16 +456,46 @@
   left: 0;
   width: 52px;
   border-radius: var(--r-m);
-  background: var(--accent);
-  opacity: 0.14;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 10%, transparent);
+  opacity: 0;
+  transition: opacity var(--d-base) var(--ease);
   pointer-events: none;
+  z-index: 0;
+}
+.tabbar.dock-dragging .tab-capsule {
+  transition: none;
+}
+/* Gesture focus — the item the moving capsule currently sits on gets a
+   gentle emphasis lift; neighbors keep normal weight (never magnified). */
+.tab-item.drag-focus {
+  color: var(--accent);
+}
+.tab-item.drag-focus .tab-icon {
+  transform: translateY(-1px) scale(1.08);
+}
+.tab-item.drag-focus .tab-label {
+  color: var(--text-2);
+  font-weight: 700;
+}
+/* Neighbors of the focused item relax slightly while dragging. */
+.tabbar.dock-dragging .tab-item:not(.drag-focus) {
+  opacity: 0.82;
 }
 @media (prefers-reduced-motion: reduce) {
   .tab-item .tab-icon {
     transition: none;
   }
+  .tab-capsule {
+    transition: none;
+  }
   .tabbar.dock-enter {
     transition: opacity 200ms linear;
+  }
+  /* No travel/scale animation — focus still changes instantly. */
+  .tab-item.drag-focus .tab-icon {
+    transform: none;
   }
 }
 

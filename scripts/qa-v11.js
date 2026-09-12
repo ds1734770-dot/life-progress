@@ -14,10 +14,14 @@
  *   9. Export → wipe → import restores quote + avatar image
  *  10. Offline launch (server down)
  *  11. Reduced-motion launch
- *  12. Mobile overflow at 320/360/390/412px (new screens included)
- *  13. Floating tab dock: compact glass dock + sliding active capsule
+ *  12. Launch fullscreen geometry (full-bleed <img>, no bottom gap, 320px)
+ *  13. Floating tab dock: compact glass dock + sliding translucent capsule
  *      (tap navigation, edges, press feedback, keyboard access, reduced
  *      motion, entrance, 320px fit, scroll stability)
+ *  14. Dock drag gesture: horizontal drag moves the focus capsule, route
+ *      changes only on release (nearest item), Home↔Settings traverses,
+ *      deterministic 60/40 snapping, pointercancel cleanup, vertical swipes
+ *      never hijack scrolling, 320/360/390/412px dock fit
  *
  * Run: node scripts/qa-v11.js
  */
@@ -277,17 +281,30 @@ try {
     if (!el) return { shown: false };
     const bg = el.querySelector('.launch-bg');
     const quote = el.querySelector('.launch-quote');
+    const skip = el.querySelector('.launch-skip');
+    const r = el.getBoundingClientRect();
+    const br = bg ? bg.getBoundingClientRect() : null;
     return {
       shown: true,
       quote: quote ? quote.textContent : null,
-      bgIsBundle: bg ? bg.style.backgroundImage.includes('launch-bg.png') : false,
-      hasSkip: !!el.querySelector('.launch-skip'),
+      isImg: bg ? bg.tagName === 'IMG' : false,
+      bgIsBundle: bg ? (bg.src || '').includes('launch-bg.png') : false,
+      hasSkip: !!skip,
+      overlayH: r.height,
+      innerH: window.innerHeight,
+      innerW: window.innerWidth,
+      bgCovers: br ? (br.top <= 0.5 && br.bottom >= window.innerHeight - 0.5 && br.left <= 0.5 && br.right >= window.innerWidth - 0.5) : false,
+      skipAboveBottom: skip ? window.innerHeight - skip.getBoundingClientRect().bottom >= 0 : false,
     };
   })()`);
   check('launch overlay appears on first launch', first.shown);
   check('default quote is exactly "Don\'t forget why u started."', first.quote === "Don't forget why u started.", JSON.stringify(first.quote));
   check('background is the bundled local fallback (offline asset)', first.bgIsBundle);
   check('skip control present', first.hasSkip);
+  check('launch background is a full-bleed <img> (object-fit cover)', first.isImg, JSON.stringify({ isImg: first.isImg }));
+  check('launch overlay fills the visual viewport (no bottom gap)', first.shown && first.overlayH >= first.innerH - 1, `h=${first.overlayH} innerH=${first.innerH}`);
+  check('launch image covers the viewport edge-to-edge', first.bgCovers, JSON.stringify(first));
+  check('skip button sits above the viewport bottom edge', first.skipAboveBottom);
 
   // Reduced-motion: the class is decided when the overlay is built, so
   // emulate BEFORE starting the session that creates it.
@@ -384,7 +401,7 @@ try {
     const bg = el.querySelector('.launch-bg');
     return {
       shown: true,
-      usesDashboardBg: bg ? bg.style.backgroundImage.includes('data:image') : false,
+      usesDashboardBg: bg ? (bg.getAttribute('src') || '').startsWith('data:image') : false,
       quote: el.querySelector('.launch-quote')?.textContent || null,
     };
   })()`);
@@ -502,8 +519,29 @@ try {
   check('reduced-motion launch completes and reaches dashboard', await evaluate(`document.querySelector('#dash-hero') !== null`));
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: '' }] });
 
-  console.log('\n— Mobile overflow (320 / 360 / 390 / 412 px) —');
-  for (const w of [320, 360, 390, 412]) {
+  console.log('\n— Launch fullscreen at 320px (narrow mobile viewport) —');
+  await setViewport(320, 640);
+  await send('Page.reload');
+  await sleep(600);
+  await waitFor(`document.getElementById('launch-screen') !== null`, 6000, 'launch overlay at 320px');
+  const launch320 = await evalAsync(`(async () => {
+    const el = document.getElementById('launch-screen');
+    if (!el) return { shown: false };
+    const r = el.getBoundingClientRect();
+    const br = el.querySelector('.launch-bg')?.getBoundingClientRect();
+    return {
+      shown: true,
+      overlayH: r.height,
+      innerH: window.innerHeight,
+      bgCovers: br ? (br.top <= 0.5 && br.bottom >= window.innerHeight - 0.5 && br.left <= 0.5 && br.right >= window.innerWidth - 0.5) : false,
+    };
+  })()`);
+  check('launch overlay fills the 320px viewport (no gap)', launch320.shown && launch320.overlayH >= launch320.innerH - 1, JSON.stringify(launch320));
+  check('launch image covers edge-to-edge at 320px', launch320.bgCovers);
+  await waitFor(launchOverlayGone, 9000, 'launch overlay leaves at 320px');
+
+  console.log('\n— Mobile overflow (320 / 360 / 390 px) —');
+  for (const w of [320, 360, 390]) {
     await setViewport(w, Math.round(w * 1.9));
     await checkOverflow(`${w}px`);
   }
@@ -574,7 +612,8 @@ try {
   })()`);
   const tapTab = async (route) => {
     await evaluate(`document.querySelector('.tabbar .tab-item[data-route="${route}"]').click()`);
-    const ok = await waitFor(`location.hash === '#/${route}'`, 5000, `tap → ${route}`);
+    await sleep(120); // navigate() runs async after hashchange — let it start
+    const ok = await waitFor(`location.hash === '#/${route}' && document.querySelector('.tabbar .tab-item.active')?.dataset.route === '${route}'`, 5000, `tap → ${route}`);
     await sleep(450); // capsule travel (~300ms) must finish
     const activeOk = await evaluate(
       `document.querySelector('.tabbar .tab-item.active')?.dataset.route === '${route}' &&
@@ -636,6 +675,173 @@ try {
   check('touch press applies the subtle scale-down feedback', press.pressed);
   check('press feedback releases cleanly', press.released);
 
+  console.log('\n— Floating dock: horizontal drag gesture (release-to-navigate) —');
+  await setViewport(390, 844);
+  await evaluate(`location.hash = '#/dashboard'`);
+  await waitFor(`document.querySelector('#dash-hero') !== null`, 10000, 'dashboard for drag QA');
+  await waitFor(`document.querySelector('.tabbar .tab-item.active') !== null`, 6000, 'dock ready');
+  await sleep(400);
+
+  /** Synthetic drag across the dock surface via PointerEvents. */
+  const dragDock = async (startItem, endItem, steps = 24) => {
+    await evalAsync(`(async () => {
+      const bar = document.querySelector('.tabbar');
+      const s = document.querySelector('.tabbar .tab-item[data-route="${startItem}"]').getBoundingClientRect();
+      const t = document.querySelector('.tabbar .tab-item[data-route="${endItem}"]').getBoundingClientRect();
+      const y = (s.top + s.bottom) / 2;
+      const x0 = s.left + s.width / 2;
+      const x1 = t.left + t.width / 2;
+      const opts = (x) => ({ bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: x, clientY: y });
+      bar.dispatchEvent(new PointerEvent('pointerdown', opts(x0)));
+      for (let i = 1; i <= ${steps}; i++) {
+        bar.dispatchEvent(new PointerEvent('pointermove', opts(x0 + (x1 - x0) * (i / ${steps}))));
+        if (i === Math.floor(${steps} * 0.25)) window.__dragQuarterCapX = (() => { const p = document.querySelector('.tab-capsule').style.transform.match(/translate3d\\((-?[\\d.]+)px/); return p ? parseFloat(p[1]) : null; })();
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      return true;
+    })()`);
+  };
+  const releaseDock = () => evaluate(`(() => {
+    const bar = document.querySelector('.tabbar');
+    bar.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: 0, clientY: 0 }));
+  })()`);
+  const midDragState = () => evalAsync(`(async () => {
+    const items = [...document.querySelectorAll('.tabbar .tab-item')];
+    const cap = document.querySelector('.tab-capsule');
+    const raw = (cap.style.transform || '').replace('translate3d(', '');
+    const capX = parseFloat(raw);
+    return {
+      hash: location.hash,
+      focus: items.findIndex((i) => i.classList.contains('drag-focus')),
+      dragging: document.querySelector('.tabbar').classList.contains('dock-dragging'),
+      capX: Number.isFinite(capX) ? capX : null,
+    };
+  })()`);
+  const settle = () => waitFor(`!document.querySelector('.tabbar .drag-focus') && !document.querySelector('.tabbar.dock-dragging')`, 4000, 'gesture state cleared');
+
+  // Home → Water: route must NOT change mid-drag; release navigates.
+  await evaluate(`window.__dragQuarterCapX = null`);
+  await dragDock('dashboard', 'water');
+  const quarterX = await evaluate(`window.__dragQuarterCapX`);
+  const mid1 = await midDragState();
+  await releaseDock();
+  const nav1 = await waitFor(`location.hash === '#/water'`, 5000, 'release → water');
+  await settle();
+  const cap1 = await capsuleX();
+  check('dragging does NOT change the route mid-gesture', mid1.hash === '#/dashboard' && mid1.dragging === true, JSON.stringify(mid1));
+  check('drag moves the visual focus across items', mid1.focus === 1, `focus=${mid1.focus}`);
+  check('capsule travels with the finger (quarter-drag position precedes the settled target)',
+    quarterX != null && cap1 != null && quarterX < cap1 - 1,
+    `quarter=${quarterX} settled=${cap1}`);
+  check('release navigates to the focused item (no tap needed)', nav1 && (await evaluate(`document.querySelector('.tabbar .tab-item.active')?.dataset.route`)) === 'water');
+  check('capsule settles on Water after gesture navigation', near(cap1, 1), `cap=${cap1} item=${itemRelCenters?.[1]}`);
+
+  // Multi-hop drag: Water → Goals in one gesture. Continuous focus stepping
+  // through the middle item proves the capsule moved progressively (not a
+  // single jump), while the route only changes once, on release.
+  await evaluate(`window.__dragFocusSteps = []`);
+  await evaluate(`
+    window.__dragFocusWatcher = setInterval(() => {
+      const f = [...document.querySelectorAll('.tabbar .tab-item')].findIndex((i) => i.classList.contains('drag-focus'));
+      const arr = window.__dragFocusSteps;
+      if (f >= 0 && arr[arr.length - 1] !== f) arr.push(f);
+    }, 16);
+  `);
+  await dragDock('water', 'goals');
+  await releaseDock();
+  const nav2 = await waitFor(`location.hash === '#/goals'`, 5000, 'release → goals');
+  await evaluate(`clearInterval(window.__dragFocusWatcher)`);
+  const stepSeen = await evaluate(`(window.__dragFocusSteps || []).join(',')`);
+  await settle();
+  check('multi-hop drag Water → Goals navigates on release', nav2);
+  check('focus stepped continuously through intermediate items (no jumps)',
+    stepSeen === '2,3' || stepSeen === '1,2,3', `steps=${stepSeen}`);
+
+  // Full traverse: Home → Settings in one drag.
+  await dragDock('dashboard', 'settings', 40);
+  const mid3 = await midDragState();
+  await releaseDock();
+  const nav3 = await waitFor(`location.hash === '#/settings'`, 5000, 'release → settings');
+  await settle();
+  const cap3 = await capsuleX();
+  check('one drag travels Home → Settings and navigates', nav3 && mid3.focus === 5, `focus=${mid3.focus}`);
+  check('capsule settles on Settings after the traverse', near(cap3, 5), `cap=${cap3}`);
+
+  // And back: Settings → Home.
+  await dragDock('settings', 'dashboard', 40);
+  await releaseDock();
+  const nav4 = await waitFor(`location.hash === '#/dashboard'`, 5000, 'release → dashboard');
+  await settle();
+  const cap4 = await capsuleX();
+  check('dragging back Settings → Home navigates home', nav4);
+  check('capsule returns to Home', near(cap4, 0), `cap=${cap4} item=${itemRelCenters?.[0]}`);
+
+  // Determinism: releasing near the 60/40 split between Water and Gym picks Gym.
+  await tapTab('gym');
+  await settle();
+  const snap = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const centers = [...bar.querySelectorAll('.tab-item')].map((i) => { const r = i.getBoundingClientRect(); return r.left + r.width / 2; });
+    const y = (bar.getBoundingClientRect().top + bar.getBoundingClientRect().bottom) / 2;
+    // Water center + 60% of the Water→Gym span → the Gym zone owns it.
+    const x = centers[1] + (centers[2] - centers[1]) * 0.6;
+    const opts = (px) => ({ bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: px, clientY: y });
+    bar.dispatchEvent(new PointerEvent('pointerdown', opts(centers[1])));
+    for (let i = 1; i <= 16; i++) { bar.dispatchEvent(new PointerEvent('pointermove', opts(centers[1] + (x - centers[1]) * (i / 16)))); await new Promise((r) => setTimeout(r, 12)); }
+    return { x, gymCenter: centers[2] };
+  })()`);
+  await releaseDock();
+  const snapNav = await waitFor(`location.hash === '#/gym'`, 5000, '60% release → gym');
+  await settle();
+  check('releasing 60% toward Gym snaps to Gym (deterministic)', snapNav, `x=${snap.x.toFixed(1)} gym=${snap.gymCenter.toFixed(1)}`);
+  // And just before the midpoint → Water (deterministic nearest-zone).
+  await tapTab('gym');
+  await settle();
+  await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const centers = [...bar.querySelectorAll('.tab-item')].map((i) => { const r = i.getBoundingClientRect(); return r.left + r.width / 2; });
+    const y = (bar.getBoundingClientRect().top + bar.getBoundingClientRect().bottom) / 2;
+    const x = centers[1] + (centers[2] - centers[1]) * 0.4;
+    const opts = (px) => ({ bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch', clientX: px, clientY: y });
+    bar.dispatchEvent(new PointerEvent('pointerdown', opts(centers[1])));
+    for (let i = 1; i <= 12; i++) { bar.dispatchEvent(new PointerEvent('pointermove', opts(centers[1] + (x - centers[1]) * (i / 12)))); await new Promise((r) => setTimeout(r, 12)); }
+    return true;
+  })()`);
+  await releaseDock();
+  const snapBack = await waitFor(`location.hash === '#/water'`, 5000, '40% release → water');
+  await settle();
+  check('releasing 40% toward Gym snaps back to Water (deterministic)', snapBack);
+
+  // Pointercancel: gesture aborts cleanly, route unchanged, no stuck state.
+  await dragDock('water', 'gym');
+  await evaluate(`document.querySelector('.tabbar').dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 7 }))`);
+  const cancelState = await midDragState();
+  check('pointercancel aborts without navigating', cancelState.hash === '#/water', JSON.stringify({ hash: cancelState.hash }));
+  check('pointercancel clears gesture state (no stuck focus/drag classes)',
+    await evaluate(`!document.querySelector('.tabbar .drag-focus') && !document.querySelector('.tabbar.dock-dragging')`));
+  await tapTab('gym');
+
+  console.log('\n— Floating dock: tap still works after gesture code —');
+  await tapTab('water');
+  await tapTab('dashboard');
+  check('plain taps still navigate normally', await evaluate(`location.hash === '#/dashboard'`));
+
+  console.log('\n— Floating dock: capsule transparency (icon stays readable) —');
+  const capStyle = await evalAsync(`(async () => {
+    const c = document.querySelector('.tab-capsule');
+    const s = getComputedStyle(c);
+    // Alpha from rgba(...) or color(srgb ... / a) serializations alike.
+    const nums = s.backgroundColor.match(/[\\d.]+/g) || [];
+    const alpha = s.backgroundColor.includes('/') || nums.length === 4 ? parseFloat(nums[nums.length - 1]) : 1;
+    return { alpha, zIndex: parseInt(s.zIndex, 10), pointerEvents: s.pointerEvents };
+  })()`);
+  check('capsule background alpha ≤ 0.2 (translucent tint, not a block)',
+    Number.isFinite(capStyle.alpha) && capStyle.alpha <= 0.2, `alpha=${capStyle.alpha}`);
+  check('capsule is paint-stacked below the items (z-index < 1)', Number.isFinite(capStyle.zIndex) && capStyle.zIndex < 1, `z=${capStyle.zIndex}`);
+  check('capsule never intercepts pointers', capStyle.pointerEvents === 'none');
+  check('icons remain fully readable above the capsule (accent on active)',
+    await evaluate(`getComputedStyle(document.querySelector('.tabbar .tab-item.active .tab-icon')).color !== 'rgba(0, 0, 0, 0)'`));
+
   console.log('\n— Floating dock: keyboard accessibility —');
   await send('Page.bringToFront'); // headless: key default actions need page focus
   await sleep(200);
@@ -665,8 +871,19 @@ try {
   await sleep(150);
   await tapTab('goals');
   const rmCap = await capsuleX();
-  check('reduced motion: capsule still tracks the active route (no animation)', near(rmCap, 3), `cap=${rmCap}`);
+  check('reduced motion: capsule still tracks the active route (no animation)', near(rmCap, 3), `cap=${rmCap} focus3=${itemRelCenters?.[3]}`);
   check('reduced motion: tap navigation still works', await evaluate(`location.hash === '#/goals'`));
+  // Gesture under reduced motion: focus snaps instantly, release still navigates.
+  await dragDock('goals', 'water');
+  const rmMid = await midDragState();
+  await releaseDock();
+  const rmNav = await waitFor(`location.hash === '#/water'`, 5000, 'reduced-motion release → water');
+  await settle();
+  check('reduced motion: drag gesture still moves the focus', rmMid.focus === 1, `focus=${rmMid.focus}`);
+  check('reduced motion: release still navigates (no animation needed)', rmNav);
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: '' }] });
+  await sleep(200); // media emulation release is async — let it settle
+  await tapTab('goals');
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: '' }] });
   await sleep(200);
   await tapTab('dashboard');
@@ -727,6 +944,49 @@ try {
   } else {
     check('dock stays fixed in place while the page scrolls', true, 'page not scrollable at this height — skipped');
   }
+
+  console.log('\n— Floating dock: vertical swipe on the dock does not hijack scrolling —');
+  const vSwipe = await evalAsync(`(async () => {
+    const bar = document.querySelector('.tabbar');
+    const r = bar.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y0 = (r.top + r.bottom) / 2;
+    const opts = (px, py) => ({ bubbles: true, pointerId: 11, isPrimary: true, pointerType: 'touch', clientX: px, clientY: py });
+    bar.dispatchEvent(new PointerEvent('pointerdown', opts(x, y0)));
+    for (let i = 1; i <= 10; i++) {
+      bar.dispatchEvent(new PointerEvent('pointermove', opts(x, y0 - i * 6)));
+      await new Promise((res) => setTimeout(res, 12));
+    }
+    bar.dispatchEvent(new PointerEvent('pointerup', opts(x, y0 - 60)));
+    await new Promise((res) => setTimeout(res, 150));
+    return {
+      route: location.hash,
+      dragging: bar.classList.contains('dock-dragging'),
+      focusSet: !!document.querySelector('.tabbar .drag-focus'),
+    };
+  })()`);
+  check('vertical movement never activates the drag gesture', !vSwipe.dragging && !vSwipe.focusSet, JSON.stringify(vSwipe));
+  check('vertical swipe leaves the route unchanged', vSwipe.route === '#/goals', vSwipe.route);
+
+  console.log('\n— Floating dock: responsive safety (320 / 360 / 390 / 412 px) —');
+  for (const w of [320, 360, 390, 412]) {
+    await setViewport(w, Math.round(w * 1.9));
+    const dockFit = await evalAsync(`(async () => {
+      const bar = document.querySelector('.tabbar');
+      const r = bar.getBoundingClientRect();
+      return {
+        fits: r.right <= window.innerWidth + 1 && r.left >= -1,
+        edges: r.left >= 4 && window.innerWidth - r.right >= 4,
+        noInnerOverflow: bar.scrollWidth <= bar.clientWidth + 1,
+        count: bar.querySelectorAll('.tab-item').length,
+        pageOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1,
+      };
+    })()`);
+    check(`dock fits ${w}px with edge margins and no inner overflow`,
+      dockFit.fits && dockFit.edges && dockFit.noInnerOverflow && dockFit.count === 6, JSON.stringify(dockFit));
+    check(`no page horizontal overflow at ${w}px with dock visible`, dockFit.pageOverflow);
+  }
+  await setViewport(390, 844);
 
   console.log('\n— Console errors —');
   const realErrors = consoleErrors.filter(

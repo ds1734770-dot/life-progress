@@ -56,7 +56,7 @@ function buildOverlay(bgUrl, quoteText, reduced) {
   if (reduced) root.classList.add('reduced');
 
   root.innerHTML = `
-    <div class="launch-bg" style="background-image:url('${bgUrl}')" aria-hidden="true"></div>
+    <img class="launch-bg" src="${bgUrl}" alt="" aria-hidden="true" draggable="false">
     <div class="launch-veil" aria-hidden="true"></div>
     <div class="launch-content">
       <div class="launch-mark" aria-hidden="true">“</div>
@@ -115,7 +115,9 @@ export function playLaunchExperience() {
       .then((bg) => {
         if (done) return;
         const bgEl = overlay.querySelector('.launch-bg');
-        if (bgEl && !bg.bundled) bgEl.style.backgroundImage = `url('${bg.url}')`;
+        if (bgEl && !bg.bundled) {
+          bgEl.src = bg.url; // full-bleed <img>: object-fit: cover fills the viewport
+        }
       })
       .catch(() => {});
 

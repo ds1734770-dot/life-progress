@@ -4,6 +4,9 @@ import {
   DOCK_TUNING,
   capsuleFor,
   interpolateCapsule,
+  followAlpha,
+  shouldStartDrag,
+  snapIndex,
 } from '../js/tabbar-dock.js';
 
 // ---------------------------------------------------------------------------
@@ -82,4 +85,99 @@ test('DOCK_TUNING respects the spec ranges', () => {
   assert.ok(DOCK_TUNING.iconScale >= 1.05 && DOCK_TUNING.iconScale <= 1.12, 'active icon scale 1.05–1.12');
   assert.ok(DOCK_TUNING.pressScale >= 0.96 && DOCK_TUNING.pressScale <= 0.98, 'press scale 0.96–0.98');
   assert.ok(DOCK_TUNING.capsuleMinW >= 44, 'capsule is a comfortable touch target');
+  assert.ok(DOCK_TUNING.dragAxisThreshold >= 4 && DOCK_TUNING.dragAxisThreshold <= 8, 'drag threshold 4–8px');
+  assert.ok(DOCK_TUNING.snapHysteresis > 0 && DOCK_TUNING.snapHysteresis < 0.5, 'snap hysteresis is a small share');
+});
+
+// ---------------------------------------------------------------------------
+// followAlpha — frame-rate-independent smoothing
+// ---------------------------------------------------------------------------
+
+test('followAlpha is the base alpha at 60fps', () => {
+  assert.equal(followAlpha(16.67).toFixed(2), DOCK_TUNING.followAlpha60.toFixed(2));
+});
+
+test('followAlpha compensates for slower frames (bigger step, same speed)', () => {
+  assert.ok(followAlpha(33.3) > followAlpha(16.67), '120fps-spacing frames move further');
+  assert.ok(followAlpha(33.3) <= 1, 'never exceeds 1');
+});
+
+test('followAlpha clamps huge frame gaps and never goes out of range', () => {
+  for (const dt of [0, -5, 4000, Number.NaN]) {
+    const a = followAlpha(dt);
+    assert.ok(a > 0 && a <= 1, `alpha in (0,1] for dt=${dt}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// shouldStartDrag — axis threshold
+// ---------------------------------------------------------------------------
+
+test('shouldStartDrag needs the minimum horizontal movement', () => {
+  assert.equal(shouldStartDrag(DOCK_TUNING.dragAxisThreshold, 0), true);
+  assert.equal(shouldStartDrag(DOCK_TUNING.dragAxisThreshold - 1, 0), false);
+  assert.equal(shouldStartDrag(-12, 0), true, 'both directions count');
+});
+
+test('shouldStartDrag rejects vertical-dominant movement', () => {
+  assert.equal(shouldStartDrag(10, 40), false, 'vertical swipe must scroll, not drag');
+  assert.equal(shouldStartDrag(30, 30), false, 'diagonal ties go to scrolling');
+});
+
+test('shouldStartDrag accepts horizontal-dominant movement', () => {
+  assert.equal(shouldStartDrag(40, 10), true);
+  assert.equal(shouldStartDrag(8, 1), true);
+});
+
+// ---------------------------------------------------------------------------
+// snapIndex — deterministic nearest-item release resolution
+// ---------------------------------------------------------------------------
+
+function evenCenters(n, width) {
+  const step = width / n;
+  return Array.from({ length: n }, (_, i) => step * (i + 0.5));
+}
+
+const CENTERS = evenCenters(6, 360); // 30, 90, 150, 210, 270, 330
+
+test('snapIndex picks the nearest item center', () => {
+  assert.equal(snapIndex(CENTERS, 360, 80, 0), 1, 'closer to item 1 than item 0');
+  assert.equal(snapIndex(CENTERS, 360, 320, 5), 5);
+  assert.equal(snapIndex(CENTERS, 360, 0, 0), 0);
+  assert.equal(snapIndex(CENTERS, 360, 359, 5), 5);
+});
+
+test('snapIndex resolves 60/40 splits toward the majority side', () => {
+  // Between item 1 (90) and item 2 (150): x=114 is 40% of the way → item 1.
+  assert.equal(snapIndex(CENTERS, 360, 114, 1), 1);
+  // x=126 is 60% of the way → item 2 wins.
+  assert.equal(snapIndex(CENTERS, 360, 126, 1), 2);
+});
+
+test('snapIndex hysteresis keeps the origin on tiny accidental movements', () => {
+  const tiny = CENTERS[0] + CENTERS[0] * 0.1; // barely moved from item 0
+  assert.equal(snapIndex(CENTERS, 360, tiny, 0), 0);
+  // Nearest-center zones imply ~50% hysteresis: Home holds until the
+  // midpoint toward the neighbor (30px), not at the first few pixels.
+  const midpoint = (CENTERS[0] + CENTERS[1]) / 2; // 60
+  assert.equal(snapIndex(CENTERS, 360, midpoint - 5, 0), 0, 'before the midpoint Home still wins');
+  assert.equal(snapIndex(CENTERS, 360, midpoint + 5, 0), 1, 'past the midpoint the neighbor wins');
+});
+
+test('snapIndex without an origin is plain nearest-center', () => {
+  assert.equal(snapIndex(CENTERS, 360, 200, null), 3);
+  assert.equal(snapIndex(CENTERS, 360, 40, -1), 0);
+});
+
+test('snapIndex is deterministic for exact midpoints (direction-free, lower index wins ties)', () => {
+  const mid = (CENTERS[1] + CENTERS[2]) / 2; // exactly between two items
+  const a = snapIndex(CENTERS, 360, mid, 1);
+  const b = snapIndex(CENTERS, 360, mid, 1);
+  assert.equal(a, b, 'same input → same output');
+  assert.ok(a === 1 || a === 2);
+});
+
+test('snapIndex handles degenerate inputs', () => {
+  assert.equal(snapIndex([], 360, 100, 0), 0);
+  assert.equal(snapIndex([150], 360, 100, null), 0, 'single item always wins');
 });

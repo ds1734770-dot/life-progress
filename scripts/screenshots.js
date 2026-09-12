@@ -166,7 +166,7 @@ try {
   }
 
   // Floating dock + active capsule states (V1.1) — capsule travels with the
-  // active route, so we capture it on two different destinations.
+  // active route, so we capture it on several different destinations.
   await evaluate(`location.hash = '#/gym'`);
   await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
   await sleep(500); // capsule travel (~300ms) settles
@@ -175,6 +175,24 @@ try {
   await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
   await sleep(500);
   await shot('dock-focus-journal');
+  await evaluate(`location.hash = '#/water'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
+  await sleep(500);
+  await shot('dock-focus-water');
+  await evaluate(`location.hash = '#/settings'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
+  await sleep(500);
+  await shot('dock-focus-settings');
+
+  // Narrow-viewport dock (320px) — compact fit, no clipping.
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 2, mobile: true });
+  await sleep(600);
+  await evaluate(`location.hash = '#/dashboard'`);
+  await waitFor(`document.querySelector('.screen-root')?.children.length > 0`, 8000);
+  await sleep(700);
+  await shot('dock-320-dashboard');
+  await send('Emulation.setDeviceMetricsOverride', { width: 420, height: 900, deviceScaleFactor: 2, mobile: true });
+  await sleep(400);
 
   // Light theme
   await evaluate(`location.hash = '#/settings'`);
