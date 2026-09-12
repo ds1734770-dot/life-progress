@@ -112,8 +112,9 @@ export function filterGoals(goals, filter, key = todayKey()) {
  * Days (ending today/yesterday) that had at least one goal completed.
  * Uses the full per-day completion history, so recurring daily goals keep
  * their streak across resets, and legacy records still count.
+ * `today` is injectable for deterministic tests (defaults to the real day).
  */
-export function goalStreak(goals) {
+export function goalStreak(goals, today = todayKey()) {
   const days = new Set();
   for (const g of goals) {
     if (g.completedDays?.length) {
@@ -122,7 +123,7 @@ export function goalStreak(goals) {
       days.add(dateKey(new Date(g.completedAt))); // legacy pre-history record
     }
   }
-  return calculateStreak([...days]);
+  return calculateStreak([...days], today);
 }
 
 /**

@@ -28,8 +28,8 @@ export function workoutsOn(workouts, key) {
   return workouts.filter((w) => w.date === key);
 }
 
-export function workoutStreak(workouts) {
-  return calculateStreak(workouts.map((w) => w.date));
+export function workoutStreak(workouts, today = todayKey()) {
+  return calculateStreak(workouts.map((w) => w.date), today);
 }
 
 export function gymStats(workouts) {

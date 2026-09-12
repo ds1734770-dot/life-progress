@@ -247,8 +247,15 @@ test('todayProgressFraction counts only today-completed goals', () => {
 });
 
 test('goal streak survives the daily reset', () => {
+  // The fixed TODAY keeps the test deterministic regardless of the real date:
+  // 3 consecutive days ending on TODAY (today-or-yesterday keeps a streak alive).
   const goal = makeGoal({ title: 't', type: 'daily', completedDays: ['2026-09-10', '2026-09-09', '2026-09-08'] });
-  assert.equal(goalStreak([goal]), 3);
+  assert.equal(goalStreak([goal], TODAY), 3);
+  // A gap in the history breaks the streak at 1.
+  const gappy = makeGoal({ title: 't2', type: 'daily', completedDays: ['2026-09-10', '2026-09-08'] });
+  assert.equal(goalStreak([gappy], TODAY), 1);
+  // Same data viewed from a later day: the streak is over.
+  assert.equal(goalStreak([goal], '2026-09-14'), 0);
 });
 
 test('overdue respects per-day completion and missing end dates', () => {
@@ -287,7 +294,9 @@ test('water streak counts days at/above target and breaks on gaps', () => {
 
 test('water streak helper composes with calculateStreak', () => {
   const entries = [makeWaterEntry(3000, new Date(2026, 8, 10, 8).getTime()), makeWaterEntry(3000, new Date(2026, 8, 9, 8).getTime())];
-  assert.equal(waterStreak(entries), 2);
+  assert.equal(waterStreak(entries, TODAY), 2);
+  // Same data viewed from a later day: the streak has expired.
+  assert.equal(waterStreak(entries, '2026-09-14'), 0);
 });
 
 test('last7Days clamps percentage to 0..100 and labels today', () => {
@@ -319,7 +328,9 @@ test('journal streak counts days, not entries', () => {
     makeJournalEntry({ title: 'b', date: '2026-09-10' }),
     makeJournalEntry({ title: 'c', date: '2026-09-09' }),
   ];
-  assert.equal(journalStreak(entries), 2);
+  assert.equal(journalStreak(entries, TODAY), 2);
+  // Same data viewed from a later day: the streak has expired.
+  assert.equal(journalStreak(entries, '2026-09-14'), 0);
 });
 
 test('searchEntries matches title, content and tags case-insensitively', () => {
@@ -333,7 +344,9 @@ test('searchEntries matches title, content and tags case-insensitively', () => {
 test('workout streak de-duplicates same-day workouts', () => {
   const mk = (d, created) => makeWorkout({ date: d, createdAt: created });
   const list = [mk('2026-09-10', 2), mk('2026-09-10', 1), mk('2026-09-09', 1)];
-  assert.equal(workoutStreak(list), 2);
+  assert.equal(workoutStreak(list, TODAY), 2);
+  // Same data viewed from a later day: the streak has expired.
+  assert.equal(workoutStreak(list, '2026-09-14'), 0);
 });
 
 test('personalRecords keeps the best weight per exercise', () => {

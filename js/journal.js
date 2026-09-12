@@ -48,9 +48,9 @@ export function searchEntries(entries, query) {
   );
 }
 
-export function journalStreak(entries) {
+export function journalStreak(entries, today = todayKey()) {
   // Days (de-duplicated), not entries — multiple entries in one day count once.
-  return calculateStreak([...new Set(entries.map((e) => e.date))]);
+  return calculateStreak([...new Set(entries.map((e) => e.date))], today);
 }
 
 export function journalStats(entries) {

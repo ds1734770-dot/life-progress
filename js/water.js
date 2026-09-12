@@ -47,15 +47,16 @@ export function waterFraction(entries, key = todayKey()) {
   return clamp(totalOn(entries, key) / waterTarget(), 0, 1);
 }
 
-/** Days where the daily target was met. */
+/** Days where the daily target was met (date-independent: every day is checked). */
 export function metDays(entries) {
   const totals = totalsByDay(entries);
   const target = waterTarget();
   return [...totals.entries()].filter(([, total]) => total >= target).map(([key]) => key);
 }
 
-export function waterStreak(entries) {
-  return calculateStreak(metDays(entries));
+/** Current streak of target-met days; `today` is injectable for deterministic tests. */
+export function waterStreak(entries, today = todayKey()) {
+  return calculateStreak(metDays(entries), today);
 }
 
 /** Last 7 days (oldest first) with totals + labels. */
