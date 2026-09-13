@@ -164,6 +164,10 @@ export function defaultSettings() {
     launchQuote: "Don't forget why u started.", // motivational launch quote
     avatar: { type: 'builtin', value: 'sunrise' }, // { type: 'builtin'|'initials'|'custom', value }
     avatarImage: null, // Blob — local, never uploaded (custom avatar only)
+    // --- V1.3 smart progress camera ---
+    photoTemplateId: null, // progress photo used as the alignment reference
+    photoAutoCapture: true, // auto shutter once the position is stable
+    referenceMode: 'ghost', // 'ghost' | 'outline' | 'off' — reference guide visibility
     createdAt: Date.now(),
   };
 }

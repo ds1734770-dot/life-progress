@@ -254,7 +254,60 @@ new assets.
   gallery pick, Dashboard/Settings integration, blob persistence),
   export/import of personalization, full-restart persistence and overflow at
   320/360/390/412px.
-- Screenshots (`npm run screenshots`) are written to `screenshots/`.
+- **Smart camera QA** (`npm run qa:camera`): 88 checks for the reference-aware
+  progress camera — template analysis (on-device, metadata-only profiles),
+  live camera + ghost overlay + skeleton, guidance/meter/stability/auto
+  capture, the saved crop matching the aligned composition, lifecycle (tracks
+  stopped, detector paused, 10 open/close cycles), the model-missing and
+  permission-denied fallbacks, export/wipe/import of profiles, orphan pruning,
+  the **real vendored model** initialising and inferring on-device, offline
+  (server down, app shell from cache), reduced motion, accessibility and
+  320–1024px layouts in both themes.
+- Screenshots (`npm run screenshots`, `npm run screenshots:camera`) are written
+  to `screenshots/`.
+
+---
+
+## V1.3 status
+
+**V1.3 — reference-aware smart progress camera (additive).** Progress photos,
+history, comparison, achievements and export/import behave exactly as before;
+the smart camera is an optional enhancement on top of the existing capture path.
+
+How it works:
+
+- **Photo template** — any existing progress photo can become the active
+  template. Its pose is analysed *on device* and stored as a compact,
+  versioned metadata profile (`js/pose/reference.js`, IndexedDB store
+  `photoReferences`). The photo itself stays the single authoritative record:
+  no copy, no re-encode, no extra bytes.
+- **Alignment** — `js/pose/alignment.js` compares the live pose with the
+  profile in ONE canonical composition space (`js/camera/coordinates.js`)
+  across position, scale/distance, framing, posture and head, using weighted,
+  confidence-aware scoring. It returns one prioritised instruction at a time
+  (no person → framing → distance → position → posture → stability → capture)
+  with hysteresis so guidance never flickers.
+- **Camera** — `js/screens/camera.js` shows the live preview with the previous
+  photo as a **ghost** overlay (Ghost / Outline / Off) and both skeletons,
+  adapts inference cadence to the device, requires ~1s of stable alignment
+  before the countdown, and always allows manual capture. The saved photo is
+  cropped to exactly the composition the user aligned to.
+- **Privacy/offline** — the runtime (`vendor/mediapipe/`) is self-hosted and
+  the pinned bundle contains no external URLs or telemetry; camera frames,
+  photos and landmarks never leave the device. Nothing loads until the smart
+  camera is opened, and after the first use the feature works offline from the
+  service-worker cache.
+- **Fallback** — unsupported browser, missing model, failed init, no camera or
+  denied permission all degrade to the existing standard capture path.
+
+Quality gate (all verified on the current commit):
+
+- `npm test` — 225/225 passing (includes 4 new pose/coordinate suites)
+- `npm run smoke` — passing
+- `npm run qa` — all extended checks passing
+- `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
+- `npm run qa:camera` — 88/88 smart camera checks passing
+- `npm run screenshots:camera` — 10 camera screenshots (states, themes, 320/768px)
 
 ---
 

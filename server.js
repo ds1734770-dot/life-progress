@@ -22,6 +22,9 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.webp': 'image/webp',
   '.woff2': 'font/woff2',
+  // The vendored pose runtime needs this exact type: WebAssembly.instantiateStreaming
+  // refuses anything else and silently falls back to a much slower path.
+  '.wasm': 'application/wasm',
 };
 
 createServer(async (req, res) => {

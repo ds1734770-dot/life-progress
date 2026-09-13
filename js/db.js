@@ -7,9 +7,11 @@
  */
 
 const DB_NAME = 'life-progress-db';
-// V2: adds achievementRecords (V1.2 Phase 2). Older databases upgrade in
-// place via onupgradeneeded; existing stores and their data are untouched.
-const DB_VERSION = 2;
+// V2: adds achievementRecords (V1.2 Phase 2).
+// V3: adds photoReferences (smart progress camera) — derived pose/composition
+// metadata keyed by the progress photo it belongs to. Older databases upgrade
+// in place via onupgradeneeded; existing stores and their data are untouched.
+const DB_VERSION = 3;
 
 export const STORES = Object.freeze({
   settings: 'settings',
@@ -17,6 +19,10 @@ export const STORES = Object.freeze({
   goals: 'goals',
   workouts: 'workouts',
   progressPhotos: 'progressPhotos',
+  // Derived reference profiles for the smart progress camera. Each record is
+  // keyed by its progress photo id and holds pose/composition metadata only —
+  // never image data — so the photo stays the single authoritative record.
+  photoReferences: 'photoReferences',
   journalEntries: 'journalEntries',
   achievementRecords: 'achievementRecords',
 });
@@ -121,6 +127,11 @@ export async function dbExportAll(serializeRecord) {
 /**
  * Replace all data with an exported dump. deserializeRecord reverses the
  * export-time serialization for progressPhotos (data URL → Blob).
+ *
+ * Dumps written before V3 simply have no `photoReferences` key — the store is
+ * then cleared rather than treated as an error, so importing an old backup
+ * keeps working. Orphaned reference profiles (and a dangling active-template
+ * pointer) are reconciled by js/photos.js#pruneReferences after the import.
  */
 export async function dbImportAll(dump, deserializeRecord) {
   if (!dump || dump.data == null) throw new Error('Invalid backup file.');

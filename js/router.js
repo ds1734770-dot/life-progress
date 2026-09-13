@@ -15,6 +15,7 @@ import { mount as mountSettings } from './screens/settings.js';
 import { mount as mountAchievements } from './screens/achievements.js';
 import { mount as mountAvatar } from './screens/avatar.js';
 import { mount as mountPhotos } from './screens/photos.js';
+import { mount as mountCamera } from './screens/camera.js';
 import { icon } from './ui.js';
 import { enhanceTabbar } from './tabbar-dock.js';
 
@@ -39,8 +40,32 @@ const SCREENS = {
   avatar: { mount: mountAvatar },
   photos: { mount: mountPhotos },
   'photos/compare': { mount: mountPhotos, mode: 'compare' },
+  'photos/camera': { mount: mountCamera },
   'journal/edit': { mount: mountJournal, mode: 'edit' },
 };
+
+/**
+ * Screens with live resources (the smart camera holds a MediaStream, a pose
+ * detector and an animation loop) register a teardown here. It runs on every
+ * route change — including leaving via the back button — so no camera track or
+ * inference loop can survive a navigation (§47).
+ */
+const cleanups = [];
+
+export function registerCleanup(fn) {
+  if (typeof fn === 'function') cleanups.push(fn);
+}
+
+function runCleanups() {
+  while (cleanups.length) {
+    const fn = cleanups.pop();
+    try {
+      fn();
+    } catch (err) {
+      console.warn('[LifeProgress] screen cleanup failed', err);
+    }
+  }
+}
 
 export function currentRouteName() {
   const hash = window.location.hash.replace(/^#\/?/, '');
@@ -65,6 +90,10 @@ export async function navigate(target) {
     return;
   }
   const root = document.getElementById('screen-root');
+
+  // Release whatever the outgoing screen was holding (camera, timers, …)
+  // BEFORE the new screen mounts and repaints.
+  runCleanups();
 
   // Fresh screen-enter animation on each navigation.
   root.classList.remove('screen-enter');

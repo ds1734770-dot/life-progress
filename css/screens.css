@@ -1552,3 +1552,449 @@
   60% { opacity: 1; }
   100% { opacity: 0.85; transform: translateX(-50%) scale(1); }
 }
+
+/* ===========================================================================
+   V1.3 — Smart progress camera
+   The stage is a dark video surface in both themes (like the photo viewer) so
+   the preview stays true; everything around it uses the existing tokens, so
+   the camera reads as part of Life Progress rather than a separate app.
+   =========================================================================== */
+
+.cam-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-5);
+  --cam-ink: #e7eef6;
+  --cam-ink-2: #a9b8c7;
+}
+
+.cam-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.cam-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.cam-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.cam-sub {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* ------- Stage ------- */
+
+.cam-stage-wrap {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.cam-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--cam-aspect, 3 / 4);
+  background: #05070a;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-l);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.cam-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #05070a;
+}
+.cam-video.mirrored {
+  transform: scaleX(-1);
+}
+.cam-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ------- Stage states (loading / errors / countdown) ------- */
+
+.cam-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-5);
+  text-align: center;
+  background: rgba(5, 7, 10, 0.84);
+  color: var(--cam-ink);
+}
+.cam-state[hidden] {
+  display: none;
+}
+.cam-state-title {
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+.cam-state-text {
+  max-width: 32ch;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--cam-ink-2);
+}
+.cam-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  justify-content: center;
+  margin-top: var(--sp-1);
+}
+.cam-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: camSpin 900ms linear infinite;
+}
+.cam-spinner[hidden] {
+  display: none;
+}
+@keyframes camSpin {
+  to { transform: rotate(360deg); }
+}
+
+.cam-countdown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 7, 10, 0.26);
+}
+.cam-countdown[hidden] {
+  display: none;
+}
+.cam-countdown span {
+  font-size: 72px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  animation: camCount var(--d-slow) var(--spring);
+}
+@keyframes camCount {
+  0% { opacity: 0; transform: scale(0.72); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* ------- Guidance + match meter ------- */
+
+.cam-guidance {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  text-align: center;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.cam-arrow {
+  font-size: var(--fs-xl);
+  font-weight: 800;
+  color: var(--accent);
+}
+.cam-arrow[hidden] {
+  display: none;
+}
+.cam-guidance[data-code="hold"],
+.cam-guidance[data-code="capture"] {
+  color: var(--success);
+}
+.cam-guidance.pulse {
+  animation: rise var(--d-base) var(--ease-out);
+}
+
+.cam-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.cam-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.cam-meter-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.cam-meter-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--info);
+  transition: width 140ms linear, background var(--d-base) var(--ease);
+}
+.cam-meter.aligned .cam-meter-fill {
+  background: var(--accent);
+}
+.cam-meter.matched .cam-meter-fill {
+  background: var(--success);
+}
+.cam-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.cam-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+}
+.cam-chip.ok {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 42%, transparent);
+}
+.cam-hold {
+  min-height: 18px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);
+}
+.cam-meter.matched .cam-hold {
+  color: var(--success);
+}
+
+/* ------- Controls ------- */
+
+.cam-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.cam-controls.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.cam-shutter {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+  background: transparent;
+}
+.cam-shutter span {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: transform var(--d-fast) var(--spring);
+}
+.cam-shutter:active span {
+  transform: scale(0.86);
+}
+.cam-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.cam-chip-btn {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.cam-chip-btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.cam-fallback-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+}
+
+/* ------- Captured result ------- */
+
+.cam-result {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  overflow: hidden;
+  background: #05070a;
+}
+.cam-result img {
+  width: 100%;
+  max-height: 56dvh;
+  object-fit: contain;
+}
+.cam-result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+.cam-note {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+
+/* ------- Reduced motion + slow devices ------- */
+
+.cam-screen.reduced .cam-guidance.pulse,
+.cam-screen.slow-device .cam-guidance.pulse {
+  animation: none;
+}
+.cam-screen.reduced .cam-countdown span {
+  animation: none;
+}
+.cam-screen.reduced .cam-meter-fill,
+.cam-screen.reduced .cam-shutter span {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-guidance.pulse,
+  .cam-countdown span {
+    animation: none;
+  }
+  .cam-meter-fill,
+  .cam-shutter span {
+    transition: none;
+  }
+}
+
+/* ------- Narrow phones (320–360px) ------- */
+
+@media (max-width: 380px) {
+  .cam-guidance {
+    font-size: var(--fs-md);
+  }
+  .cam-chip {
+    font-size: 10px;
+    padding: 3px 7px;
+  }
+  .cam-controls-row .cam-chip-btn {
+    padding: 6px 10px;
+  }
+}
+
+/* ===========================================================================
+   V1.3 — Photo template (reference profile) picker in the photo viewer
+   =========================================================================== */
+
+.photo-template-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  background: var(--surface-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.photo-template-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.photo-template-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.photo-template-clear {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--accent);
+}
+.photo-hint {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+.photo-template-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.photo-template-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  margin-top: var(--sp-4);
+  text-align: left;
+}
+.photo-template-status {
+  font-size: var(--fs-xs);
+  line-height: 1.8;
+  color: #b9c6d4;
+}
+.photo-template-check {
+  color: #93a3b3;
+}
+.photo-template-check.ok {
+  color: var(--success);
+}
+.photo-template-note {
+  margin-top: 4px;
+  color: #93a3b3;
+}
+.photo-template-retry {
+  margin-bottom: 4px;
+  font-weight: 700;
+  color: var(--warning);
+}

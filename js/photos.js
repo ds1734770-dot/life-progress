@@ -4,9 +4,11 @@
  *
  * Privacy: images live only in local IndexedDB and are never uploaded anywhere.
  */
-import { dbDelete, dbGetAll, dbPut } from './db.js';
+import { dbDelete, dbGet, dbGetAll, dbPut } from './db.js';
 import { makeProgressPhoto } from './models.js';
+import { getSettings, saveSettings } from './settings.js';
 import { safe } from './utils.js';
+import { parseReferenceProfile } from './pose/reference.js';
 
 export async function addPhoto(file, { date, label = '', notes = '' } = {}) {
   const [blob, thumb] = await Promise.all([
@@ -50,6 +52,106 @@ export async function dataURLToBlob(dataUrl) {
 
 export async function deletePhoto(id) {
   await dbDelete('progressPhotos', id);
+  // A deleted photo can no longer be a reference template (§45): drop its
+  // derived profile and clear the active pointer so no orphan metadata and no
+  // broken template survives the delete.
+  await deleteReferenceProfile(id);
+  const settings = getSettings();
+  if (settings.photoTemplateId === id) {
+    await saveSettings({ photoTemplateId: null });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reference profiles — pose/composition metadata for the smart camera.
+//
+// One record per progress photo, keyed by the photo id, containing no image
+// data. The photo remains the authoritative entity, so export/import, delete
+// and wipe keep working through the exact same paths.
+// ---------------------------------------------------------------------------
+
+export async function saveReferenceProfile(profile) {
+  const parsed = parseReferenceProfile(profile);
+  if (!parsed) throw new Error('Refusing to store an invalid reference profile.');
+  await dbPut('photoReferences', parsed);
+  return parsed;
+}
+
+export async function getReferenceProfile(photoId) {
+  if (!photoId) return null;
+  return parseReferenceProfile(await dbGet('photoReferences', photoId));
+}
+
+export async function getAllReferenceProfiles() {
+  const all = await safe(() => dbGetAll('photoReferences'), []) || [];
+  return all.map(parseReferenceProfile).filter(Boolean);
+}
+
+export async function deleteReferenceProfile(photoId) {
+  if (!photoId) return;
+  await safe(() => dbDelete('photoReferences', photoId));
+}
+
+/**
+ * Make a photo the active template. A photo can only become the template once
+ * its reference profile exists, so the pointer can never dangle.
+ */
+export async function setActiveTemplate(photoId) {
+  if (!photoId) {
+    await saveSettings({ photoTemplateId: null });
+    return null;
+  }
+  const profile = await getReferenceProfile(photoId);
+  if (!profile || !profile.quality?.usable) return null;
+  await saveSettings({ photoTemplateId: photoId });
+  return profile;
+}
+
+export async function clearActiveTemplate() {
+  await saveSettings({ photoTemplateId: null });
+}
+
+/**
+ * Load the active template as { photo, profile } — or null when there is none
+ * or it no longer resolves. Used by the smart camera and the photos screen.
+ */
+export async function getActiveTemplate(photoList) {
+  const photoTemplateId = getSettings().photoTemplateId;
+  if (!photoTemplateId) return null;
+  const list = photoList || (await getAllPhotos());
+  const photo = list.find((p) => p.id === photoTemplateId);
+  if (!photo) return null;
+  const profile = await getReferenceProfile(photo.id);
+  if (!profile) return null;
+  return { photo, profile };
+}
+
+/**
+ * Reconcile reference metadata with the photos that actually exist: removes
+ * profiles whose photo is gone and clears a pointer that no longer resolves.
+ * Called after a backup import (where profiles and photos arrive together, or
+ * not at all) and defensively when the photos screen mounts.
+ */
+export async function pruneReferences(photoList) {
+  const list = photoList || (await getAllPhotos());
+  const photoIds = new Set(list.map((p) => p.id));
+  // Deliberately reads the raw store (not getAllReferenceProfiles) so records
+  // that no longer parse — a profile from a future/older format, or a partially
+  // written record — are cleaned up too instead of lingering invisibly.
+  const records = (await safe(() => dbGetAll('photoReferences'), [])) || [];
+  let removed = 0;
+  for (const record of records) {
+    const key = record && (record.photoId || record.id);
+    const profile = parseReferenceProfile(record);
+    if (profile && photoIds.has(profile.photoId)) continue;
+    if (key) await deleteReferenceProfile(key);
+    removed += 1;
+  }
+  const templateId = getSettings().photoTemplateId;
+  if (templateId && !photoIds.has(templateId)) {
+    await clearActiveTemplate();
+  }
+  return { removed, profiles: records.length - removed };
 }
 
 // ---------------------------------------------------------------------------

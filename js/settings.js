@@ -29,12 +29,17 @@ export const LAUNCH_FALLBACK_BG =
  * step or DB version bump. Invalid values fall back to defaults.
  */
 function withDefaults(stored) {
-  const s = { ...defaultSettings(), ...stored };
+  const defaults = defaultSettings();
+  const s = { ...defaults, ...stored };
   if (typeof s.launchQuote !== 'string' || !s.launchQuote.trim()) {
-    s.launchQuote = defaultSettings().launchQuote;
+    s.launchQuote = defaults.launchQuote;
   }
   s.avatar = normalizeAvatar(s.avatar);
   if (!(s.avatarImage instanceof Blob)) s.avatarImage = null;
+  // --- V1.3 smart progress camera ---
+  if (typeof s.photoTemplateId !== 'string' || !s.photoTemplateId) s.photoTemplateId = null;
+  s.photoAutoCapture = s.photoAutoCapture !== false;
+  if (!['ghost', 'outline', 'off'].includes(s.referenceMode)) s.referenceMode = defaults.referenceMode;
   return s;
 }
 

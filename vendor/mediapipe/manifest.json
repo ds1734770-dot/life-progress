@@ -1,0 +1,39 @@
+{
+  "runtime": "@mediapipe/tasks-vision",
+  "runtimeVersion": "0.10.14",
+  "model": {
+    "name": "pose_landmarker_lite",
+    "version": "1",
+    "path": "models/pose_landmarker_lite.task",
+    "source": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+    "license": "Apache-2.0"
+  },
+  "wasmVariants": [
+    "simd"
+  ],
+  "wasmBase": "wasm",
+  "bundle": "vision_bundle.mjs",
+  "privacy": "Vendored same-origin. Inference runs on-device (WASM). No telemetry, no analytics, no camera frame / progress photo / pose landmark leaves the device.",
+  "files": [
+    {
+      "path": "vision_bundle.mjs",
+      "bytes": 136870,
+      "sha256": "e77f281f9619150d937023c355bae170e9120e3b9e43f1e23a2a7bee07197669"
+    },
+    {
+      "path": "wasm/vision_wasm_internal.js",
+      "bytes": 209826,
+      "sha256": "9440cf0cc0cea21800e31581ec32aeedcc5fbf9df4509796bbc7d3f99e52ab9c"
+    },
+    {
+      "path": "wasm/vision_wasm_internal.wasm",
+      "bytes": 9423986,
+      "sha256": "f82a8e6c05e08a44cc9f9e7ec5f845935bcbb1b1500ebe8c2f4812fb4e2917dc"
+    },
+    {
+      "path": "models/pose_landmarker_lite.task",
+      "bytes": 5777746,
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a"
+    }
+  ]
+}

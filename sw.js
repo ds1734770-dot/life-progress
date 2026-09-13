@@ -3,7 +3,7 @@
  * Precaches the core assets at install time and serves them cache-first.
  * Cross-origin requests and data URLs are never cached or intercepted.
  */
-const CACHE = 'life-progress-v1.8';
+const CACHE = 'life-progress-v1.9';
 
 // Relative URLs (no leading slash) so the app deploys at a domain root OR a
 // subpath (e.g. GitHub Pages project sites) without changes.
@@ -45,6 +45,23 @@ const CORE_ASSETS = [
   './js/screens/achievements.js',
   './js/screens/settings.js',
   './js/screens/avatar.js',
+  './js/screens/camera.js',
+  './js/pose/geometry.js',
+  './js/pose/reference.js',
+  './js/pose/alignment.js',
+  './js/pose/detector.js',
+  './js/pose/analyze.js',
+  './js/camera/coordinates.js',
+  './js/camera/controller.js',
+  './js/camera/overlay.js',
+  // Vendored pose runtime (V1.3 smart progress camera). Only the ~137 KB JS
+  // bundle is precached so app install stays fast; the multi-megabyte WASM +
+  // model download once on first use and are then served from this cache by
+  // the runtime handler below, so the feature works fully offline afterwards.
+  // Nothing here is loaded during normal app startup. See
+  // scripts/fetch-pose-assets.js and vendor/mediapipe/README.md.
+  './vendor/mediapipe/vision_bundle.mjs',
+  './vendor/mediapipe/manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];

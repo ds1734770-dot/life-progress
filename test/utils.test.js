@@ -364,12 +364,19 @@ test('personalRecords keeps the best weight per exercise', () => {
 });
 
 test('weeklyVolume buckets totals into Monday-start weeks', () => {
+  // Dates are derived from the current week so this test never depends on the
+  // day it happens to run: bucket 1 = this week, bucket 0 = last week.
   const mk = (d, minutes) => makeWorkout({ date: d, duration: minutes });
-  const list = [mk('2026-09-10', 45), mk('2026-09-07', 30), mk('2026-08-31', 99)];
+  const thisWeek = startOfWeekKey(dateKey());
+  const lastWeek = addDays(thisWeek, -7);
+  const twoWeeksAgo = addDays(thisWeek, -14);
+  const list = [mk(thisWeek, 45), mk(lastWeek, 30), mk(twoWeeksAgo, 99)];
   const volume = weeklyVolume(list, 2);
   assert.equal(volume.length, 2);
-  assert.equal(volume[1].minutes, 75); // week of 2026-09-07
-  assert.equal(volume[0].minutes, 99); // week of 2026-08-31
+  assert.equal(volume[1].minutes, 45); // this week
+  assert.equal(volume[0].minutes, 30); // last week (two weeks ago is out of range)
+  // The older bucket is genuinely excluded rather than folded in.
+  assert.equal(weeklyVolume(list, 3)[0].minutes, 99);
 });
 
 // ---------------------------------------------------------------------------
