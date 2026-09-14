@@ -8,10 +8,12 @@
  * 6. Register the service worker (offline support)
  */
 import { loadSettings, getSettings, onSystemThemeChange } from './settings.js';
+
 import { navigate, renderTabbar, currentRouteName } from './router.js';
 import { showOnboarding } from './onboarding.js';
 import { playLaunchExperience } from './launch.js';
 import { checkAchievementsNow } from './celebration.js';
+import { runReminderSweep, pruneDeliveryState } from './notifications.js';
 
 async function boot() {
   try {
@@ -43,6 +45,34 @@ async function boot() {
   // boot is never delayed. Newly earned badges are persisted (earns are
   // permanent) and celebrated once; unseen celebrations re-queue next start.
   checkAchievementsNow();
+
+  // V1.5 — local reminder sweep. Without a push server the browser can only
+  // notify while the app is alive, so reminders evaluate on boot, on every
+  // foreground (visibilitychange) and on a light interval while open. The
+  // dedup store guarantees each logical reminder shows once per day.
+  scheduleReminders();
+}
+
+function scheduleReminders() {
+  const sweep = () => {
+    runReminderSweep().catch(() => { /* never disturb the session */ });
+  };
+  sweep();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) sweep();
+  });
+  setInterval(sweep, 15 * 60 * 1000); // gentle in-page re-check, dedup gates repeats
+  // Housekeeping: drop dedup records older than 30 days (fire-and-forget).
+  pruneDeliveryState().catch(() => {});
+  // SW notificationclick deep links (§15/§19): the service worker focuses the
+  // open app and posts the payload's route; the hash router does the rest.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'notification-route' && typeof event.data.route === 'string') {
+        location.hash = event.data.route;
+      }
+    });
+  }
 }
 
 function registerServiceWorker() {

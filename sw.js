@@ -3,7 +3,7 @@
  * Precaches the core assets at install time and serves them cache-first.
  * Cross-origin requests and data URLs are never cached or intercepted.
  */
-const CACHE = 'life-progress-v1.10';
+const CACHE = 'life-progress-v1.11';
 
 // Relative URLs (no leading slash) so the app deploys at a domain root OR a
 // subpath (e.g. GitHub Pages project sites) without changes.
@@ -34,7 +34,9 @@ const CORE_ASSETS = [
   './js/onboarding.js',
   './js/launch.js',
   './js/personalization.js',
+  './js/notifications.js',
   './assets/launch-bg.png',
+  './js/screens/notificationsSettings.js',
   './js/screens/dashboard.js',
   './js/screens/water.js',
   './js/screens/goals.js',
@@ -112,4 +114,35 @@ self.addEventListener('fetch', (event) => {
       return hit || network;
     })
   );
+});
+
+// ---------------------------------------------------------------------------
+// V1.5 — Notifications: display + click deep links.
+// The page shows notifications via the Notification API while it is open;
+// this handler takes over when the page is closed (and for future push).
+// Every payload carries data.route — the SAME hash routes the in-app router
+// uses, so clicking a notification lands on the right screen with no
+// parallel navigation system.
+// ---------------------------------------------------------------------------
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const route = (event.notification.data && event.notification.data.route) || '#/dashboard';
+  event.waitUntil(
+    (async () => {
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const target = clientList.find((c) => c.url.startsWith(self.registration.scope));
+      if (target) {
+        // App is open: focus it and navigate via the hash (router picks up).
+        await target.focus();
+        target.postMessage({ type: 'notification-route', route });
+        return;
+      }
+      // App closed: open it directly on the deep-linked screen.
+      await self.clients.openWindow(route);
+    })()
+  );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'skip-waiting') self.skipWaiting();
 });

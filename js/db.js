@@ -14,7 +14,9 @@ const DB_NAME = 'life-progress-db';
 // V4: adds workoutTemplates, exerciseLibrary and activeWorkout stores (V1.4
 // gym templates). The legacy `workouts` store is NOT touched — completed
 // sessions keep their exact historical shape and ids.
-const DB_VERSION = 4;
+// V5: adds notificationState (V1.5 notifications) — notification preferences
+// (singleton 'prefs') plus one dedup record per delivered logical reminder.
+const DB_VERSION = 5;
 
 export const STORES = Object.freeze({
   settings: 'settings',
@@ -35,6 +37,10 @@ export const STORES = Object.freeze({
   // Singleton record (id 'active') holding the in-progress workout, so an
   // unfinished session survives reload/offline. Deleted on complete/discard.
   activeWorkout: 'activeWorkout',
+  // V1.5 notifications — preferences (id 'prefs') and delivery/dedup records
+  // (id `${type}:${periodKey}`). Eligibility is always DERIVED from the
+  // authoritative activity stores; nothing here duplicates user data.
+  notificationState: 'notificationState',
 });
 
 export const ALL_STORES = Object.values(STORES);

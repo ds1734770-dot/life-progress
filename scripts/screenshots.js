@@ -334,6 +334,48 @@ try {
   await evaluate(`(async () => { const gt = await import('/js/gymTemplates.js'); await gt.clearActiveWorkout(); const r = await import('/js/router.js'); r.go('gym'); })()`);
   await sleep(600);
 
+  // ---- V1.5 notification states (§27) ---------------------------------------
+  await evaluate(`location.hash = '#/settings'`);
+  await waitFor(`!!document.querySelector('#notif-section')`, 8000);
+  await sleep(700);
+  await shot('notif-settings-off'); // master OFF, no categories (§27 #2/#4)
+  await evaluate(`(async () => {
+    const notif = await import('/js/notifications.js');
+    await notif.saveNotificationPrefs({ enabled: true });
+    return true;
+  })()`);
+  await evaluate(`(() => { const r = document.querySelector('#notif-section [data-action="notif-toggle"]'); r && r.click(); true })()`);
+  await sleep(700);
+  await shot('notif-settings-on'); // categories + times + quiet hours (§27 #3)
+  await shot('notif-dark'); // §27 #10
+  await evaluate(`(async () => {
+    const s = await import('/js/settings.js');
+    await s.saveSettings({ theme: 'light' });
+    const r = await import('/js/router.js');
+    r.go('settings');
+    return true;
+  })()`);
+  await sleep(700);
+  await shot('notif-light'); // §27 #11
+  await evaluate(`(async () => {
+    const s = await import('/js/settings.js');
+    await s.saveSettings({ theme: 'dark' });
+    return true;
+  })()`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 900, deviceScaleFactor: 2, mobile: true });
+  await evaluate(`(() => { const r = document.querySelector('#notif-section [data-action="notif-toggle"]'); r && r.click(); true })()`);
+  await sleep(700);
+  await shot('notif-320'); // §27 #12 (master off again → default state)
+  await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 900, deviceScaleFactor: 2, mobile: true });
+  await evaluate(`(async () => {
+    const notif = await import('/js/notifications.js');
+    await notif.saveNotificationPrefs({ enabled: false });
+    const r = await import('/js/router.js');
+    r.go('dashboard');
+    return true;
+  })()`);
+  await sleep(600);
+
   // Dark theme screenshots
   const darkScreens = [
     ['dashboard', 'dashboard'],

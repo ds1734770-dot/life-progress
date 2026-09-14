@@ -2455,3 +2455,61 @@
   font-weight: 700;
   justify-content: center;
 }
+
+/* Category rows + their nested reminder-time rows */
+.notif-categories {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.notif-category {
+  border-bottom: 1px solid var(--border);
+}
+.notif-category:last-child {
+  border-bottom: none;
+}
+.notif-category.off .settings-row-title,
+.notif-category.off .settings-row-sub {
+  opacity: 0.6;
+}
+
+.notif-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 16px 12px 62px; /* aligns under the row title, past the icon */
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  text-align: left;
+}
+.notif-time-row:active {
+  background: var(--surface-2);
+}
+.notif-time-value {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* Calm explanation when the browser blocks notifications */
+.notif-denied-note {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-m);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+/* Narrow phones: keep the time row aligned but give the value room */
+@media (max-width: 359px) {
+  .notif-time-row {
+    padding-left: 54px;
+  }
+}

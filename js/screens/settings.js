@@ -1,6 +1,8 @@
 /**
  * Settings — appearance, personalization, per-feature preferences,
  * and safe data controls (export / import / clear with confirmation).
+ * V1.5 adds the Notifications section (preferences + permission UX + test
+ * notification); the notification domain (js/notifications.js) owns the logic.
  */
 import { getSettings, saveSettings, loadSettings, resetSettings } from '../settings.js';
 import { ACHIEVEMENTS, loadAchievementRecords } from '../achievements.js';
@@ -8,6 +10,7 @@ import * as photos from '../photos.js';
 import { dbExportAll, dbImportAll, dbResetAll } from '../db.js';
 import { themeOptions, WORKOUT_TYPES } from '../models.js';
 import { DEFAULT_LAUNCH_QUOTE, LAUNCH_QUOTE_MAX, launchQuote, sanitizeLaunchQuote, avatarMarkup, revokeAvatarUrls } from '../personalization.js';
+import { mountNotifications } from './notificationsSettings.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
 
@@ -16,7 +19,9 @@ export async function mount(root, params) {
   const settings = getSettings();
   render(root, settings);
   refreshAchievementsSub(root);
+  mountNotifications(root);
 }
+
 
 /** Live "n of N unlocked" on the Achievements row (async, non-blocking). */
 async function refreshAchievementsSub(root) {
@@ -196,6 +201,8 @@ function render(root, settings) {
         </div>
       </div>
     </section>
+
+    <div id="notif-section"></div>
 
     <section class="section stagger">
       <h3 class="section-title" style="font-size:var(--fs-lg)">Data</h3>

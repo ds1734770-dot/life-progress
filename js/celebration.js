@@ -15,6 +15,7 @@
 
 import { badgeMarkup, syncAchievements, nextMilestone } from './achievements.js';
 import { loadHistoryData } from './history.js';
+import { notifyAchievement } from './notifications.js';
 
 const SEEN_KEY = 'achievements-celebrated';
 
@@ -78,6 +79,12 @@ export async function checkAchievementsNow() {
         earnedAt: Date.now(),
       }))
     );
+    // V1.5 — additional notification entry point for newly earned badges.
+    // The celebration above remains authoritative and unchanged; the notify
+    // call is fire-and-forget, deduped per achievement, and respects prefs.
+    for (const achievement of earnedNew) {
+      notifyAchievement(achievement).catch(() => {});
+    }
     return earnedNew.map((a) => a.id);
   } catch (err) {
     console.error('[LifeProgress] Achievement evaluation failed', err);
