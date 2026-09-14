@@ -4,10 +4,13 @@
  * Routes:
  *   #/dashboard  #/water  #/gym  #/goals  #/journal  #/history  #/settings
  *   #/photos              #/photos/compare        #/journal/edit
+ *   #/gym/create          #/gym/template/:id      #/gym/edit/:id   #/gym/workout
  */
 import { mount as mountDashboard } from './screens/dashboard.js';
 import { mount as mountWater } from './screens/water.js';
 import { mount as mountGym } from './screens/gym.js';
+import { mount as mountGymTemplate } from './screens/gymTemplate.js';
+import { mount as mountGymSession } from './screens/gymSession.js';
 import { mount as mountGoals } from './screens/goals.js';
 import { mount as mountJournal } from './screens/journal.js';
 import { mount as mountHistory } from './screens/history.js';
@@ -32,6 +35,11 @@ const SCREENS = {
   dashboard: { mount: mountDashboard },
   water: { mount: mountWater },
   gym: { mount: mountGym },
+  'gym/create': { mount: mountGymTemplate, mode: 'create' }, // new template editor
+  'gym/template': { mount: mountGymTemplate }, // :id = template detail
+  'gym/edit': { mount: mountGymTemplate, mode: 'edit' }, // :id = template editor
+  'gym/workout': { mount: mountGymSession }, // active session (empty param = freeform)
+  'gym/new': { mount: mountGymSession }, // legacy quick-log entry → empty-workout session
   goals: { mount: mountGoals },
   journal: { mount: mountJournal },
   history: { mount: mountHistory },
@@ -82,7 +90,19 @@ export async function navigate(target) {
   const { name, params } =
     typeof target === 'string' ? parsePath(target) : target;
   const fullKey = params && params.length ? `${name}/${params.join('/')}` : name;
-  const def = SCREENS[fullKey] || SCREENS[name];
+  // Exact match first ('photos/compare', 'gym/workout'). Then a two-segment
+  // prefix match (V1.4 gym: 'gym/template/:id' → SCREENS['gym/template'] with
+  // the remaining params) — additive; every existing exact route still wins.
+  let def = SCREENS[fullKey];
+  let effectiveParams = params;
+  if (!def && params && params.length) {
+    const prefixDef = SCREENS[`${name}/${params[0]}`];
+    if (prefixDef) {
+      def = prefixDef;
+      effectiveParams = params.slice(1);
+    }
+  }
+  if (!def) def = SCREENS[name];
   if (!def) {
     // Unknown route: fall back to the dashboard instead of crashing.
     console.warn(`[LifeProgress] Unknown route: ${fullKey}`);
@@ -101,7 +121,7 @@ export async function navigate(target) {
   void root.offsetWidth;
   root.classList.add('screen-enter');
 
-  await def.mount(root, params, def.mode);
+  await def.mount(root, effectiveParams, def.mode);
   updateTabbar(name);
   window.scrollTo(0, 0);
 }
@@ -112,10 +132,17 @@ function parsePath(target) {
 }
 
 export function go(path) {
-  if (parsePath(path).name === currentRouteName()) {
+  // Compare FULL route keys (segments included), not just the first segment:
+  // 'gym' → 'gym/workout' must update the hash so reload re-mounts the same
+  // screen (§20 resume) and browser history stays correct.
+  const target = parsePath(path);
+  const targetKey = [target.name, ...target.params].join('/');
+  const current = parseHash();
+  const currentKey = [current.name, ...current.params].join('/');
+  if (targetKey === currentKey) {
     navigate(path); // same route: force re-render
   } else {
-    window.location.hash = `#/${path.replace(/^#\/?/, '')}`;
+    window.location.hash = `#/${targetKey}`;
   }
 }
 

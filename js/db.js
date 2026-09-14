@@ -11,7 +11,10 @@ const DB_NAME = 'life-progress-db';
 // V3: adds photoReferences (smart progress camera) — derived pose/composition
 // metadata keyed by the progress photo it belongs to. Older databases upgrade
 // in place via onupgradeneeded; existing stores and their data are untouched.
-const DB_VERSION = 3;
+// V4: adds workoutTemplates, exerciseLibrary and activeWorkout stores (V1.4
+// gym templates). The legacy `workouts` store is NOT touched — completed
+// sessions keep their exact historical shape and ids.
+const DB_VERSION = 4;
 
 export const STORES = Object.freeze({
   settings: 'settings',
@@ -25,6 +28,13 @@ export const STORES = Object.freeze({
   photoReferences: 'photoReferences',
   journalEntries: 'journalEntries',
   achievementRecords: 'achievementRecords',
+  // V1.4 gym templates — reusable workout plans (structure only, no history).
+  workoutTemplates: 'workoutTemplates',
+  // Every exercise name the user has logged, for pickers (selection not typing).
+  exerciseLibrary: 'exerciseLibrary',
+  // Singleton record (id 'active') holding the in-progress workout, so an
+  // unfinished session survives reload/offline. Deleted on complete/discard.
+  activeWorkout: 'activeWorkout',
 });
 
 export const ALL_STORES = Object.values(STORES);

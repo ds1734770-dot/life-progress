@@ -239,18 +239,39 @@ async function main() {
     check('goal completion reflected', done);
 
     console.log('\n— Gym —');
+    // V1.4: #/gym/new opens the empty-workout session flow (set-based).
     await evaluate(`location.hash = '#/gym/new'`);
-    await waitFor(`document.querySelector('.sheet') !== null`, 8000, 'workout sheet');
+    await waitFor(`document.querySelector('#gym-exercise-list') !== null`, 8000, 'workout session screen');
+    // Add an exercise through the session's picker sheet.
+    await click('[data-action="add-exercise"]');
+    await waitFor(`document.querySelector('.sheet .gym-pick-grid') !== null`, 6000, 'exercise picker');
     await evaluate(`
-      const inputs = document.querySelectorAll('.sheet .form-grid input');
-      if (inputs[0]) { inputs[0].value = 'Bench Press'; inputs[0].dispatchEvent(new Event('input')); }
-      if (inputs[1]) { inputs[1].value = '4'; inputs[1].dispatchEvent(new Event('input')); }
-      if (inputs[2]) { inputs[2].value = '8'; inputs[2].dispatchEvent(new Event('input')); }
-      if (inputs[3]) { inputs[3].value = '60'; inputs[3].dispatchEvent(new Event('input')); }
+      const search = document.querySelector('.sheet input[type=search]');
+      search.value = 'Bench Press';
+      search.dispatchEvent(new Event('input'));
     `);
-    await click('.sheet .btn-primary');
-    const workoutSaved = await waitFor(`document.body.innerText.includes('Strength')`, 6000, 'workout card');
+    await sleep(300);
+    await evaluate(`
+      const item = [...document.querySelectorAll('.sheet .gym-pick-item')].find((b) => b.textContent.includes('Bench Press'));
+      item ? item.click() : null;
+    `);
+    await waitFor(`document.querySelector('.gym-exercise') !== null`, 6000, 'exercise block');
+    // Give the set weight/reps via the stepper inputs.
+    await evaluate(`
+      const row = document.querySelector('.gym-set-row');
+      const w = row.querySelector('[aria-label^="Weight"]');
+      const r = row.querySelector('[aria-label^="Reps"]');
+      w.value = '60'; w.dispatchEvent(new Event('change'));
+      r.value = '8'; r.dispatchEvent(new Event('change'));
+    `);
+    // Complete the set, then finish the workout.
+    await click('.gym-set-row .gym-set-toggle');
+    await sleep(200);
+    await click('[data-action="finish"]');
+    const workoutSaved = await waitFor(`document.body.innerText.includes('Workout complete')`, 8000, 'completion summary');
     check('workout saved', workoutSaved);
+    await click('.gym-summary [data-action="done"]');
+    await waitFor(`location.hash.endsWith('#/gym') && document.querySelector('.stat-value') !== null`, 8000, 'gym home');
     check('stats updated', await evaluate(`document.querySelector('.stat-value')?.textContent === '1'`));
 
     console.log('\n— Progress photos —');

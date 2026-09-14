@@ -231,10 +231,12 @@ new assets.
 
 ## Testing
 
-- **Unit** (`npm test`): 57 tests covering date helpers, streak edge cases
+- **Unit** (`npm test`): 254 tests covering date helpers, streak edge cases
   (gaps, duplicates, month boundaries, daily-goal reset), the weighted
   progress calculation, water math, per-day goal semantics and formatting,
-  plus V1.1 quote sanitization, initials and avatar normalization.
+  quote sanitization, initials and avatar normalization, pose/coordinate
+  suites and the V1.4 gym domain (template CRUD semantics, pre-fill from last
+  workout, session mutations, completion, PR detection, wipe safety).
 - **End-to-end** (`npm run smoke`): drives the real app in headless Chrome
   over CDP (Node's built-in WebSocket, no dependencies) through the entire
   journey: onboarding → dashboard → add water → create & complete a goal →
@@ -263,8 +265,56 @@ new assets.
   the **real vendored model** initialising and inferring on-device, offline
   (server down, app shell from cache), reduced motion, accessibility and
   320–1024px layouts in both themes.
+- **Gym templates QA** (`npm run qa:gym`): real-browser checks for the V1.4
+  gym redesign — template-first home + honest empty state, create/edit/rename/
+  duplicate/delete flows with the exercise library, session pre-fill from last
+  workout (history never mutated), set-based logging (steppers, tap-to-complete,
+  add/remove set, add/remove exercise mid-session), reload resume from the
+  active-workout record, completion summary with PR detection, streak/achievement
+  continuity, template deletion preserving history, export/wipe/import of the
+  new stores, 320–1024px overflow, light theme, reduced motion and zero console
+  errors.
 - Screenshots (`npm run screenshots`, `npm run screenshots:camera`) are written
   to `screenshots/`.
+
+---
+
+## V1.4 status
+
+**V1.4 — gym templates + set-based workout sessions (additive).** The gym
+recedes from "fill out a form" to "choose the workout I'm doing today":
+
+- **Workout templates** (`js/gymTemplates.js`, stores `workoutTemplates`,
+  `exerciseLibrary`, `activeWorkout` — DB v4, purely additive). A template is a
+  reusable plan ("Push Day"); only completed sessions become historical
+  workouts and feed streaks, achievements, history and the dashboard.
+- **Pre-fill from last workout** — every exercise in a new session starts from
+  its most recent recorded performance (§9); historical workouts are never
+  mutated, and the empty-workout flow (`#/gym/new`, dashboard quick action)
+  remains available.
+- **Set-based logging** — per-set weight/reps steppers with real gym
+  increments (2.5 kg below 100 kg, 5 kg above), tap-to-complete with reduced
+  motion support, add/remove sets and exercises for TODAY only (skipping an
+  exercise never edits the template), rest timer (optional, dismissible),
+  beat-last-time pills and honest PR detection (strict improvement over real
+  history; first-ever performances set the baseline, they don't invent PRs).
+- **Resume** — unfinished sessions persist in the active-workout record and
+  survive reload/offline; the gym home shows a WELCOME BACK banner with a
+  guarded Discard action.
+- **Templates are not history** — deleting a template never deletes the
+  workouts performed with it; editing a template only affects future sessions.
+- **Migration aid** — any completed workout can be saved as a template from
+  the session summary (SAVE AS TEMPLATE).
+
+Quality gate (all verified on the current commit):
+
+- `npm test` — 254/254 passing (adds the V1.4 template/session domain suite)
+- `npm run smoke` — passing
+- `npm run qa`, `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
+- `npm run qa:gym` — all gym redesign checks passing
+- `npm run qa:camera` — pre-existing headless mediapipe flake on this machine
+  (fails identically on the clean tree); all camera checks pass on hardware
+- `npm run screenshots` — 13 gym-state captures (§43) alongside the existing set
 
 ---
 

@@ -129,15 +129,34 @@ try {
   await evaluate(`{ const s = document.querySelector('.sheet'); const i = s.querySelectorAll('input'); i[0].value = 'Read 20 pages'; const sel = s.querySelectorAll('select')[1]; sel.value = 'weekly'; }`);
   await click('.sheet .btn-primary');
 
+  // V1.4: log a workout through the empty-workout session flow.
   await evaluate(`location.hash = '#/gym/new'`);
-  await waitFor(`!!document.querySelector('.sheet')`);
+  await waitFor(`document.querySelector('#gym-exercise-list') !== null`);
+  await click('[data-action="add-exercise"]');
+  await waitFor(`document.querySelector('.sheet .gym-pick-grid') !== null`);
+  await evaluate(`
+    const search = document.querySelector('.sheet input[type=search]');
+    search.value = 'Bench Press';
+    search.dispatchEvent(new Event('input'));
+  `);
+  await sleep(300);
+  await evaluate(`
+    const item = [...document.querySelectorAll('.sheet .gym-pick-item')].find((b) => b.textContent.includes('Bench Press'));
+    item ? item.click() : null;
+  `);
+  await waitFor(`document.querySelector('.gym-exercise') !== null`);
   await evaluate(`{
-    const inputs = document.querySelectorAll('.sheet .form-grid input');
-    inputs[0].value = 'Bench Press'; inputs[1].value = '4'; inputs[2].value = '8'; inputs[3].value = '60';
-    const type = document.querySelector('.sheet select'); type.value = 'Strength';
+    const row = document.querySelector('.gym-set-row');
+    const w = row.querySelector('[aria-label^="Weight"]');
+    const r = row.querySelector('[aria-label^="Reps"]');
+    w.value = '60'; w.dispatchEvent(new Event('change'));
+    r.value = '8'; r.dispatchEvent(new Event('change'));
   }`);
-  await click('.sheet .btn-primary');
-  await waitFor(`document.body.innerText.includes('Strength')`);
+  await click('.gym-set-row .gym-set-toggle');
+  await click('[data-action="finish"]');
+  await waitFor(`document.body.innerText.includes('Workout complete')`);
+  await click('.gym-summary [data-action="done"]');
+  await sleep(500);
 
   await evaluate(`location.hash = '#/journal/edit'`);
   await waitFor(`!!document.getElementById('j-body')`);
@@ -147,6 +166,119 @@ try {
   }`);
   await click('[data-action="save-entry"]');
   await waitFor(`document.body.innerText.includes('A focused day')`);
+
+  // ---- V1.4 Gym states (§43) ----------------------------------------------
+  // Seed a second historical workout + templates so "My workouts" shows real
+  // cards with last-workout recency, and create a live session with pre-fill.
+  await evaluate(`(async () => {
+    const gym = await import('/js/gym.js');
+    const gt = await import('/js/gymTemplates.js');
+    const { makeWorkoutTemplate } = await import('/js/models.js');
+    await gym.addWorkout({
+      date: new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10),
+      workoutType: 'Strength', duration: 48,
+      exercises: [
+        { exerciseName: 'Shoulder Press', sets: 3, reps: 10, weight: 40 },
+        { exerciseName: 'Lat Pulldown', sets: 3, reps: 10, weight: 45 },
+      ],
+    });
+    await gt.saveTemplate(makeWorkoutTemplate({ name: 'Push Day', focus: 'Chest', exercises: [{ exerciseName: 'Bench Press' }, { exerciseName: 'Shoulder Press' }, { exerciseName: 'Lateral Raise' }] }));
+    await gt.saveTemplate(makeWorkoutTemplate({ name: 'Pull Day', focus: 'Back', exercises: [{ exerciseName: 'Lat Pulldown' }, { exerciseName: 'Barbell Row' }] }));
+    return true;
+  })()`);
+  await evaluate(`location.hash = '#/gym'`);
+  try {
+    await waitFor(`document.querySelector('.gym-template-card') !== null`, 8000);
+  } catch {
+    // One retry — the seed's dynamic imports may have raced the first mount.
+    console.log('  retry: templates not visible, re-navigating');
+    console.log('  state:', await evaluate(`(async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const t = await gt.getTemplates();
+      return 'templates=' + t.length + ' body=' + document.body.innerText.slice(0, 80);
+    })()`));
+    await evaluate(`location.hash = '#/dashboard'`);
+    await sleep(600);
+    await evaluate(`location.hash = '#/gym'`);
+    await waitFor(`document.querySelector('.gym-template-card') !== null`, 8000);
+  }
+  await sleep(500);
+  await shot('gym-home-templates');
+
+  // Template detail
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-template-card')].find((n) => n.textContent.includes('Push Day'))?.click(); true })()`);
+  await waitFor(`!!document.querySelector('[data-action="start"]')`, 6000);
+  await sleep(400);
+  await shot('gym-template-detail');
+
+  // Create flow: name → focus → exercise picker
+  await evaluate(`(async () => { const r = await import('/js/router.js'); r.go('gym/create'); })()`);
+  await waitFor(`!!document.getElementById('tpl-name')`, 6000);
+  await evaluate(`(() => { const n = document.getElementById('tpl-name'); n.value = 'Leg Day'; n.dispatchEvent(new Event('input')); })()`);
+  await click('[data-action="add-exercise"]');
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000);
+  await shot('gym-create-picker');
+  await evaluate(`(() => { document.querySelector('.sheet [data-sheet-close]')?.click(); true })()`);
+  await sleep(400);
+
+  // Active session with pre-fill from history + a completed set + rest timer
+  await evaluate(`(async () => { const r = await import('/js/router.js'); r.go('gym'); })()`);
+  await waitFor(`document.querySelector('.gym-template-card') !== null`, 8000);
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-template-card')].find((n) => n.textContent.includes('Push Day'))?.click(); true })()`);
+  await waitFor(`!!document.querySelector('[data-action="start"]')`, 6000);
+  await click('[data-action="start"]');
+  await waitFor(`document.querySelectorAll('.gym-exercise').length >= 3`, 8000);
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelector('.gym-set-row');
+    if (row) {
+      const w = row.querySelector('[aria-label^="Weight"]');
+      w.value = '62.5'; w.dispatchEvent(new Event('change'));
+    }
+    true;
+  })()`);
+  await sleep(300);
+  await shot('gym-session-prefill');
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelectorAll('.gym-set-toggle')[0]?.click(); true })()`);
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelectorAll('.gym-set-toggle')[1]?.click(); true })()`);
+  await sleep(600); // set-complete animation + beat pill
+  await shot('gym-session-set-complete');
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelector('.gym-set-row');
+    row?.querySelector('[data-role="remove-set"]') || row?.closest('.gym-exercise')?.querySelector('[data-role="add-set"]')?.click();
+    true;
+  })()`);
+  await sleep(400);
+  await shot('gym-session-add-set');
+  await evaluate(`(() => { document.querySelector('[data-action="add-exercise"]')?.click(); true })()`);
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000);
+  await shot('gym-session-add-exercise');
+  await evaluate(`(() => { document.querySelector('.sheet [data-sheet-close]')?.click(); true })()`);
+  await sleep(400);
+  // Resume banner on gym home (active session present).
+  await evaluate(`(async () => { const r = await import('/js/router.js'); r.go('gym'); })()`);
+  await waitFor(`!!document.querySelector('.gym-resume-card')`, 8000);
+  await sleep(400);
+  await shot('gym-resume-banner');
+  await evaluate(`(() => { document.querySelector('[data-action="resume-workout"]')?.click(); true })()`);
+  await waitFor(`document.querySelectorAll('.gym-exercise').length >= 3`, 8000);
+  // Completion summary with PR (62.5 × 8 vs history 60 × 8)
+  await evaluate(`(() => {
+    document.querySelectorAll('.gym-set-row .gym-set-toggle:not([aria-pressed="true"])').forEach((b) => b.click());
+    true;
+  })()`);
+  await sleep(600);
+  await click('[data-action="finish"]');
+  await waitFor(`document.body.innerText.includes('Workout complete')`, 8000);
+  await sleep(500);
+  await shot('gym-completion-pr');
+  await click('.gym-summary [data-action="done"]');
+  await waitFor(`!!document.querySelector('.gym-template-card')`, 8000);
+  // Light-theme gym home (§43 #15–18; narrow captures exist further below).
+  await evaluate(`(async () => { const s = await import('/js/settings.js'); await s.saveSettings({ theme: 'light' }); const r = await import('/js/router.js'); r.go('gym'); })()`);
+  await sleep(700);
+  await shot('gym-home-light');
+  await evaluate(`(async () => { const s = await import('/js/settings.js'); await s.saveSettings({ theme: 'dark' }); })()`);
+  await sleep(400);
 
   // Dark theme screenshots
   const darkScreens = [

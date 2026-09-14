@@ -243,19 +243,36 @@ async function seedData() {
   await click('[data-action="goal-toggle"]');
   await waitFor(`document.querySelector('.goal-card.done') !== null`, 4000, 'goal completed');
 
-  // Workout
+  // Workout (V1.4: empty-workout session flow with the exercise picker)
   await evaluate(`location.hash = '#/gym/new'`);
-  await waitFor(`document.querySelector('.sheet') !== null`, 8000, 'workout sheet');
+  await waitFor(`document.querySelector('#gym-exercise-list') !== null`, 8000, 'workout session screen');
+  await click('[data-action="add-exercise"]');
+  await waitFor(`document.querySelector('.sheet .gym-pick-grid') !== null`, 6000, 'exercise picker');
   await evaluate(`
-    const inputs = document.querySelectorAll('.sheet .form-grid input');
-    inputs[0].value = 'Deadlift';
-    inputs[1].value = '3';
-    inputs[2].value = '5';
-    inputs[3].value = '100';
+    const search = document.querySelector('.sheet input[type=search]');
+    search.value = 'Deadlift';
+    search.dispatchEvent(new Event('input'));
   `);
-  await click('.sheet .btn-primary');
-  await waitFor(`document.body.innerText.includes('Deadlift') || document.body.innerText.includes('Today')`, 6000, 'workout saved');
+  await sleep(300);
+  await evaluate(`
+    const item = [...document.querySelectorAll('.sheet .gym-pick-item')].find((b) => b.textContent.includes('Deadlift'));
+    item ? item.click() : null;
+  `);
+  await waitFor(`document.querySelector('.gym-exercise') !== null`, 6000, 'exercise block');
+  await evaluate(`
+    const row = document.querySelector('.gym-set-row');
+    const w = row.querySelector('[aria-label^="Weight"]');
+    const r = row.querySelector('[aria-label^="Reps"]');
+    w.value = '100'; w.dispatchEvent(new Event('change'));
+    r.value = '5'; r.dispatchEvent(new Event('change'));
+  `);
+  await click('.gym-set-row .gym-set-toggle');
+  await sleep(200);
+  await click('[data-action="finish"]');
+  await waitFor(`document.body.innerText.includes('Workout complete')`, 8000, 'workout saved');
   await evalAsync(`(async () => { const gym = await import('/js/gym.js'); return { n: (await gym.getAllWorkouts()).length }; })()`).then((r) => check('workout stored', r.n >= 1));
+  await click('.gym-summary [data-action="done"]');
+  await sleep(400);
 
   // Photo (real file through the picker)
   await evaluate(`location.hash = '#/photos'`);

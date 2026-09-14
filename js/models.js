@@ -10,6 +10,37 @@ export const GOAL_PRIORITIES = ['low', 'medium', 'high'];
 export const GOAL_STATUSES = ['not-started', 'in-progress', 'completed'];
 export const WORKOUT_TYPES = ['Strength', 'Cardio', 'HIIT', 'Yoga', 'Mobility', 'Sports', 'Other'];
 
+/**
+ * V1.4 Gym templates — optional focus/category for a workout template.
+ * Display-only metadata; exercises carry their own muscle grouping.
+ */
+export const TEMPLATE_FOCUSES = ['Custom', 'Chest', 'Back', 'Shoulders', 'Arms', 'Legs', 'Full Body'];
+
+/** Coarse muscle group per exercise (used for template focus + future trends). */
+export const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Quads', 'Hamstrings', 'Glutes', 'Calves', 'Core', 'Full Body', 'Other'];
+
+/**
+ * Weight stepper increments (kg) by magnitude. Practical gym plates are 2.5 kg
+ * per side (5 kg total); dumbbells move in ~2.5 kg steps. Light weights use a
+ * finer step so 40 → 42.5 stays one tap. Lb support can swap this table.
+ */
+export const WEIGHT_STEPS = [
+  { above: 0, step: 2.5 },
+  { above: 20, step: 2.5 },
+  { above: 40, step: 2.5 },
+  { above: 60, step: 5 },
+  { above: 100, step: 5 },
+];
+
+export function weightStepFor(weight) {
+  let step = WEIGHT_STEPS[0].step;
+  for (const band of WEIGHT_STEPS) if (weight > band.above) step = band.step;
+  return step;
+}
+
+/** Common rep targets for tap-to-set chips (always freely editable too). */
+export const REP_CHIPS = [5, 6, 8, 10, 12, 15];
+
 /** Display unit for workout weights. Only kg exists today; lb support can be added later without touching the UI. */
 export function gymWeightUnit(_settings) {
   return 'kg';
@@ -78,12 +109,25 @@ export function makeExercise(data = {}) {
     exerciseName: String(data.exerciseName || '').trim() || 'Exercise',
     sets: Math.max(0, Math.round(Number(data.sets) || 0)),
     reps: Math.max(0, Math.round(Number(data.reps) || 0)),
-    weight: Math.max(0, Math.round(Number(data.weight) || 0)),
+    // Nearest 0.5 — keeps every legacy integer value identical while allowing
+    // real gym increments such as 42.5 kg / 62.5 kg (V1.4 set-based logging).
+    weight: Math.max(0, Math.round((Number(data.weight) || 0) * 2) / 2),
+    // V1.4 additive: per-set detail recorded by the session flow
+    // [{ weight, reps }] in performed order. Legacy consumers ignore it.
+    performedSets: validPerformedSets(data.performedSets),
   };
 }
 
+function validPerformedSets(value) {
+  if (!Array.isArray(value)) return null;
+  const rows = value
+    .filter((s) => s && typeof s === 'object')
+    .map((s) => ({ weight: Math.max(0, Math.round((Number(s.weight) || 0) * 2) / 2), reps: Math.max(0, Math.round(Number(s.reps) || 0)) }));
+  return rows.length ? rows : null;
+}
+
 export function makeWorkout(data = {}) {
-  return {
+  const workout = {
     id: data.id || uid(),
     date: data.date || dateKey(),
     workoutType: WORKOUT_TYPES.includes(data.workoutType) ? data.workoutType : 'Strength',
@@ -92,6 +136,101 @@ export function makeWorkout(data = {}) {
     exercises: Array.isArray(data.exercises) ? data.exercises.map(makeExercise) : [],
     createdAt: data.createdAt || Date.now(),
   };
+  // V1.4 additive provenance (optional — legacy workouts never carry these).
+  if (data.templateId) workout.templateId = String(data.templateId);
+  if (data.templateName) workout.templateName = String(data.templateName).trim();
+  return workout;
+}
+
+/**
+ * V1.4 — exercise library entry. Remembers every exercise name the user has
+ * ever used so repeat logging is selection, not typing. Identity is the
+ * lowercased name (stable across renames of entries); `usedAt`/`useCount`
+ * power "recent" ordering in pickers.
+ */
+export function makeLibraryExercise(data = {}) {
+  const name = String(data.name || '').trim();
+  return {
+    id: data.id || uid(),
+    name,
+    key: name.toLowerCase(),
+    muscleGroup: MUSCLE_GROUPS.includes(data.muscleGroup) ? data.muscleGroup : 'Other',
+    usedAt: Number(data.usedAt) || Date.now(),
+    useCount: Math.max(1, Math.round(Number(data.useCount) || 1)),
+  };
+}
+
+/**
+ * V1.4 — workout template: the reusable STRUCTURE of a recurring workout
+ * ("Push Day"). Templates are plans, never history: completed sessions live
+ * only in the workouts store. Exercises keep default set structure so the
+ * next session can be pre-filled.
+ */
+export function makeTemplateExercise(data = {}) {
+  return {
+    id: data.id || uid(),
+    exerciseName: String(data.exerciseName || '').trim() || 'Exercise',
+    muscleGroup: MUSCLE_GROUPS.includes(data.muscleGroup) ? data.muscleGroup : null,
+    defaultSets: Math.max(1, Math.round(Number(data.defaultSets ?? data.sets) || 3)),
+    reps: Math.max(0, Math.round(Number(data.reps) || 0)),
+    weight: Number(data.weight) >= 0 ? Number(data.weight) : 0,
+  };
+}
+
+export function makeWorkoutTemplate(data = {}) {
+  const exercises = Array.isArray(data.exercises) ? data.exercises.map(makeTemplateExercise) : [];
+  return {
+    id: data.id || uid(),
+    name: String(data.name || '').trim(),
+    focus: TEMPLATE_FOCUSES.includes(data.focus) ? data.focus : 'Custom',
+    notes: String(data.notes || '').trim(),
+    exercises,
+    lastUsedAt: Number(data.lastUsedAt) || null, // null = never started
+    createdAt: data.createdAt || Date.now(),
+    updatedAt: data.updatedAt || Date.now(),
+  };
+}
+
+export function validateWorkoutTemplate(data) {
+  if (!String(data.name || '').trim()) return 'Give your workout a name.';
+  if (!Array.isArray(data.exercises) || !data.exercises.length) return 'Add at least one exercise.';
+  return null;
+}
+
+/**
+ * V1.4 — ACTIVE workout session (the one in-progress workout). Exactly one
+ * record (id 'active') is persisted so an unfinished session survives a
+ * reload or app close; completing the workout deletes it and writes a real
+ * historical workout. `sets` are per-set rows: { weight, reps, done }.
+ */
+export function makeSessionSet(data = {}) {
+  return {
+    weight: Number(data.weight) >= 0 ? Number(data.weight) : 0,
+    reps: Math.max(0, Math.round(Number(data.reps) || 0)),
+    done: Boolean(data.done),
+  };
+}
+
+export function makeSessionExercise(data = {}) {
+  return {
+    id: data.id || uid(),
+    exerciseName: String(data.exerciseName || '').trim() || 'Exercise',
+    muscleGroup: MUSCLE_GROUPS.includes(data.muscleGroup) ? data.muscleGroup : null,
+    sets: Array.isArray(data.sets) ? data.sets.map(makeSessionSet) : [],
+  };
+}
+
+export function makeActiveWorkout(data = {}) {
+  return {
+    id: 'active', // singleton record
+    templateId: data.templateId || null, // null = empty/freeform workout
+    templateName: String(data.templateName || '').trim(),
+    focus: TEMPLATE_FOCUSES.includes(data.focus) ? data.focus : null,
+    workoutType: WORKOUT_TYPES.includes(data.workoutType) ? data.workoutType : 'Strength',
+    startedAt: Number(data.startedAt) || Date.now(),
+    exercises: Array.isArray(data.exercises) ? data.exercises.map(makeSessionExercise) : [],
+    notes: String(data.notes || '').trim(),
+  };
 }
 
 export function validateWorkout(data) {
@@ -99,6 +238,11 @@ export function validateWorkout(data) {
     return 'Add at least one exercise, or keep it simple and just log the session.';
   }
   return null;
+}
+
+/** V1.4 — a session is finishable when it has at least one exercise with at least one set. */
+export function sessionCompletable(session) {
+  return Boolean(session && session.exercises && session.exercises.some((ex) => ex.sets && ex.sets.length));
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +313,17 @@ export function defaultSettings() {
     photoAutoCapture: true, // auto shutter once the position is stable
     referenceMode: 'ghost', // 'ghost' | 'outline' | 'off' — reference guide visibility
     createdAt: Date.now(),
+  };
+}
+
+/**
+ * V1.4 — optional rest-timer defaults, merged onto stored settings at load
+ * (same zero-migration approach as the V1.1 personalization fields).
+ */
+export function gymDefaults() {
+  return {
+    restTimerSeconds: 90, // suggested rest after a completed set (0 = off)
+    restAutoStart: true,
   };
 }
 

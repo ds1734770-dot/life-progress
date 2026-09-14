@@ -1,31 +1,44 @@
 /**
- * Gym — workout logging, exercises (sets/reps/weight), history,
- * weekly volume chart, personal records and stats.
+ * Gym — V1.4 redesign. "Choose the workout I am doing today", not a form.
+ *
+ * Hierarchy:
+ *   streak summary → RESUME banner (unfinished session) → MY WORKOUTS
+ *   (templates, start-first) → Start Empty → recent history → personal bests
+ *   → weekly volume → progress photos link (all existing content preserved).
+ *
+ * The legacy quick-log sheet stays available via #/gym/new (dashboard quick
+ * action + smoke/QA drivers) — it now opens the empty-workout session flow,
+ * which is strictly more capable than the old form.
  */
-import { getSettings, saveSettings } from '../settings.js';
 import * as gym from '../gym.js';
+import * as gymT from '../gymTemplates.js';
 import { checkAchievementsNow } from '../celebration.js';
 import { gymWeightUnit } from '../models.js';
+import { getSettings } from '../settings.js';
 import * as photos from '../photos.js';
-import { WORKOUT_TYPES } from '../models.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
-import { todayKey, formatDate, formatDuration } from '../utils.js';
+import { formatDate, formatDuration, todayKey } from '../utils.js';
 
 export async function mount(root, params) {
   photos.revokePhotoUrls();
-  const [workouts, photoList] = await Promise.all([gym.getAllWorkouts(), photos.getAllPhotos()]);
-  const state = { workouts, photoCount: photoList.length, expanded: new Set() };
+  const [workouts, templates, active, photoList] = await Promise.all([
+    gym.getAllWorkouts(),
+    gymT.getTemplates(),
+    gymT.getActiveWorkout(),
+    photos.getAllPhotos(),
+  ]);
+  const state = { workouts, templates, active, photoCount: photoList.length, expanded: new Set() };
   render(root, state);
-  if (params[0] === 'new') openWorkoutSheet(root, state);
 }
 
 function render(root, state) {
-  const { workouts, photoCount } = state;
+  const { workouts, templates, active } = state;
   const stats = gym.gymStats(workouts);
   const volume = gym.weeklyVolume(workouts, 8);
   const maxMinutes = Math.max(...volume.map((v) => v.minutes), 1);
   const prs = gym.personalRecords(workouts);
+  const unit = gymWeightUnit(getSettings());
 
   root.innerHTML = `
     <header class="flex-between" style="margin-top:var(--sp-2)">
@@ -45,68 +58,41 @@ function render(root, state) {
       <div class="muted" style="text-align:center;font-size:var(--fs-sm);font-weight:600;margin-top:8px">${stats.thisWeek} workout${stats.thisWeek === 1 ? '' : 's'} this week</div>
     </section>
 
-    <button class="btn btn-primary btn-block stagger" data-action="add-workout" style="margin-top:var(--sp-4)">
-      ${ui.icon('plus', 18)} Log workout
-    </button>
+    ${active ? resumeBanner(active) : ''}
 
-    ${workouts.length ? `
-    <section class="section stagger">
+    <section class="section stagger" aria-label="My workouts">
       <div class="section-head">
-        <h3 class="section-title" style="font-size:var(--fs-lg)">Weekly volume</h3>
+        <h3 class="section-title" style="font-size:var(--fs-lg)">My workouts</h3>
+        ${templates.length ? `<button class="section-link" data-action="create-template">${ui.icon('plus', 14)} New</button>` : ''}
       </div>
-      <div class="card">
-        <div class="bars" style="height:130px">
-          ${volume.map((v) => `
-            <div class="bar-col">
-              <div class="bar-value">${v.minutes > 0 ? `${Math.round(v.minutes / 60 * 10) / 10}h` : ''}</div>
-              <div class="bar ${v.minutes > 0 ? 'done' : ''}" data-volbar style="height:${Math.max(2, (v.minutes / maxMinutes) * 100)}%"></div>
-              <div class="bar-label">${v.label}</div>
-            </div>`).join('')}
-        </div>
-      </div>
-    </section>` : ''}
-
-    ${prs.length ? `
-    <section class="section stagger">
-      <div class="section-head">
-        <h3 class="section-title" style="font-size:var(--fs-lg)">Personal bests</h3>
-      </div>
-      <div class="card card-tight">
-        ${prs.map((r) => `
-          <div class="row">
-            <div class="row-main">
-              <div class="row-title">${ui.escapeHtml(r.name)}</div>
-              <div class="row-sub">${formatDate(r.date, { short: true })}</div>
-            </div>
-            <span style="font-weight:800;font-variant-numeric:tabular-nums">${r.weight} ${prUnit()}</span>
-            <span class="muted" style="font-size:var(--fs-sm)">× ${r.reps}</span>
-          </div>`).join('')}
-      </div>
-    </section>` : ''}
-
-    <section class="section stagger">
-      <div class="section-head">
-        <h3 class="section-title" style="font-size:var(--fs-lg)">Workout history</h3>
-      </div>
-      ${workouts.length
-        ? `<div class="flex-col">${workouts.map((w) => workoutCard(w, state)).join('')}</div>`
-        : ui.emptyState({
-            iconName: 'dumbbell',
-            title: 'Your fitness journey starts here',
-            sub: 'Log your first workout and watch the progress build.',
-            actionLabel: 'Log first workout',
-            action: () => openWorkoutSheet(root, state),
-          }).outerHTML}
+      ${templates.length
+        ? `<div class="flex-col">${templates.map((t) => templateCard(t, workouts)).join('')}</div>`
+        : gymEmptyState(root)}
+      <button class="btn btn-ghost btn-block stagger" data-action="start-empty" style="margin-top:var(--sp-3)">
+        ${ui.icon('plus', 16)} Start empty workout
+      </button>
     </section>
+
+    ${workouts.length
+      ? `<section class="section stagger">
+          <div class="section-head"><h3 class="section-title" style="font-size:var(--fs-lg)">Recent workouts</h3></div>
+          <div class="flex-col">${workouts.slice(0, 5).map((w) => recentWorkoutCard(w, unit, state.expanded.has(w.id))).join('')}</div>
+        </section>`
+      : ''}
+
+    ${prs.length ? personalBestsSection(prs, unit) : ''}
+
+    ${workouts.length ? weeklyVolumeSection(volume, maxMinutes) : ''}
 
     <section class="section stagger">
       <div class="card card-interactive" data-action="open-photos">
         <div class="flex-between">
           <div class="flex-row" style="gap:10px">
-            <div style="width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)">${ui.icon('camera', 20)}</div>              <div>
-                <div style="font-weight:700">Progress photos</div>
-                <div class="muted" style="font-size:var(--fs-sm)">${photoCount} photo${photoCount === 1 ? '' : 's'} saved</div>
-              </div>
+            <div style="width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)">${ui.icon('camera', 20)}</div>
+            <div>
+              <div style="font-weight:700">Progress photos</div>
+              <div class="muted" style="font-size:var(--fs-sm)">${state.photoCount} photo${state.photoCount === 1 ? '' : 's'} saved</div>
+            </div>
           </div>
           ${ui.icon('chevron-right', 18)}
         </div>
@@ -115,8 +101,25 @@ function render(root, state) {
   `;
 
   ui.bindActions(root, {
-    'add-workout': () => openWorkoutSheet(root, state),
+    'create-template': () => go('gym/create'),
+    'start-template': (d) => go(`gym/template/${d.id}`),
+    'start-empty': () => go('gym/workout'),
+    'resume-workout': () => go('gym/workout'),
+    'discard-workout': async () => {
+      const ok = await ui.openDialog({
+        title: 'Discard workout?',
+        message: 'Your unfinished session will be lost. Completed sets are not saved.',
+        confirmLabel: 'Discard',
+        danger: true,
+      });
+      if (!ok) return;
+      await gymT.clearActiveWorkout();
+      ui.toast('Workout discarded', 'info');
+      mount(root, []);
+    },
+    'open-history-gym': () => go('history'),
     'open-photos': () => go('photos'),
+    'open-template': (d) => go(`gym/template/${d.id}`),
     'workout-toggle': (d) => {
       if (state.expanded.has(d.id)) state.expanded.delete(d.id);
       else state.expanded.add(d.id);
@@ -139,17 +142,72 @@ function render(root, state) {
   });
 }
 
-function workoutCard(w, state) {
-  const expanded = state.expanded.has(w.id);
+/** WELCOME BACK — unfinished session resume (§20). */
+function resumeBanner(active) {
+  const total = gymT.sessionExerciseCount(active);
+  const done = active.exercises.filter((ex) => ex.sets.length && ex.sets.every((s) => s.done)).length;
+  const minutes = Math.round((Date.now() - active.startedAt) / 60000);
+  return `
+    <div class="card gym-resume-card stagger" data-action="resume-workout" role="button" tabindex="0" aria-label="Continue unfinished workout ${ui.escapeHtml(active.templateName || '')}">
+      <div class="flex-between">
+        <div class="grow">
+          <div class="flex-row" style="gap:8px">
+            <span class="pill pill-warning">${ui.icon('timer', 12)} In progress · ${minutes} min</span>
+          </div>
+          <div style="font-weight:800;font-size:var(--fs-lg);margin-top:8px">${ui.escapeHtml(active.templateName || 'Workout')}</div>
+          <div class="muted" style="font-size:var(--fs-sm);margin-top:2px">${done} / ${total} exercises completed</div>
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="resume-workout">Continue</button>
+      </div>
+      <button class="gym-resume-discard" data-action="discard-workout">Discard workout</button>
+    </div>`;
+}
+
+/** START → template card with focus + last-workout recency (§3). */
+function templateCard(t, workouts) {
+  const exerciseNames = t.exercises.map((e) => e.exerciseName);
+  const last = workouts
+    .filter((w) => w.exercises.some((ex) => exerciseNames.includes(ex.exerciseName)))
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const lastLabel = last
+    ? `Last workout · ${last.date === todayKey() ? 'today' : formatDate(last.date, { short: true })}`
+    : 'Not tried yet';
+  const focusSub = t.exercises.length
+    ? `${t.exercises.length} exercise${t.exercises.length === 1 ? '' : 's'} · ${ui.escapeHtml(t.focus)}`
+    : 'No exercises yet';
+  return `
+    <div class="card card-tight gym-template-card card-interactive" data-action="start-template" data-id="${t.id}" role="button" tabindex="0" aria-label="Start ${ui.escapeHtml(t.name)}">
+      <div class="flex-between">
+        <div class="grow" style="min-width:0">
+          <div style="font-weight:800;font-size:var(--fs-lg)">${ui.escapeHtml(t.name)}</div>
+          <div class="muted" style="font-size:var(--fs-sm);margin-top:2px">${focusSub}</div>
+          <div class="muted gym-template-last" style="font-size:var(--fs-xs);margin-top:4px">${ui.icon('timer', 11)} ${lastLabel}</div>
+        </div>
+        <span class="btn btn-primary btn-sm gym-start-btn">${ui.icon('chevron-right', 14)} Start</span>
+      </div>
+    </div>`;
+}
+
+function gymEmptyState(root) {
+  const node = ui.el('div', { class: 'empty' }, [
+    ui.el('div', { class: 'empty-icon' }, ui.icon('dumbbell', 30)),
+    ui.el('div', { class: 'empty-title' }, 'Your gym journey starts here'),
+    ui.el('div', { class: 'empty-sub' }, 'Build your workout once — we\'ll remember it for you. You won\'t have to enter your exercises every time.'),
+    ui.el('button', { class: 'btn btn-primary', type: 'button', 'data-action': 'create-template' }, ui.icon('plus', 16) + ' Create workout'),
+  ]);
+  return node.outerHTML;
+}
+
+function recentWorkoutCard(w, unit, expanded) {
   return `
     <div class="card card-tight pressable" data-action="workout-toggle" data-id="${w.id}">
       <div class="flex-between">
         <div class="grow">
           <div class="flex-row" style="gap:8px;flex-wrap:wrap">
-            <span class="pill pill-accent">${ui.escapeHtml(w.workoutType)}</span>
+            ${w.templateName ? `<span class="pill pill-accent">${ui.escapeHtml(w.templateName)}</span>` : `<span class="pill">${ui.escapeHtml(w.workoutType)}</span>`}
             ${w.duration > 0 ? `<span class="pill">${formatDuration(w.duration)}</span>` : ''}
           </div>
-          <div class="muted" style="font-size:var(--fs-sm);margin-top:6px">${w.date === todayKey() ? 'Today' : formatDate(w.date)}</div>
+          <div class="muted" style="font-size:var(--fs-sm);margin-top:6px">${w.date === todayKey() ? 'Today' : formatDate(w.date)} · ${w.exercises.length} exercise${w.exercises.length === 1 ? '' : 's'}</div>
         </div>
         <div class="flex-row" style="gap:6px">
           ${ui.icon('chevron-right', 18)}
@@ -162,7 +220,7 @@ function workoutCard(w, state) {
           ${w.exercises.map((ex) => `
             <div class="exercise-row">
               <span class="ex-name">${ui.escapeHtml(ex.exerciseName)}</span>
-              <span class="ex-detail">${ex.sets} × ${ex.reps}${ex.weight ? ` · ${ex.weight} ${prUnit()}` : ''}</span>
+              <span class="ex-detail">${ex.sets} × ${ex.reps}${ex.weight ? ` · ${ex.weight} ${unit}` : ''}</span>
             </div>`).join('')}
         </div>` : ''}
         ${w.notes ? `<div class="muted" style="font-size:var(--fs-sm);margin-top:8px">${ui.escapeHtml(w.notes)}</div>` : ''}
@@ -170,83 +228,37 @@ function workoutCard(w, state) {
     </div>`;
 }
 
-function prUnit() {
-  return gymWeightUnit(getSettings());
+function personalBestsSection(prs, unit) {
+  return `
+    <section class="section stagger">
+      <div class="section-head"><h3 class="section-title" style="font-size:var(--fs-lg)">Personal bests</h3></div>
+      <div class="card card-tight">
+        ${prs.map((r) => `
+          <div class="row">
+            <div class="row-main">
+              <div class="row-title">${ui.escapeHtml(r.name)}</div>
+              <div class="row-sub">${formatDate(r.date, { short: true })}</div>
+            </div>
+            <span style="font-weight:800;font-variant-numeric:tabular-nums">${r.weight} ${unit}</span>
+            <span class="muted" style="font-size:var(--fs-sm)">× ${r.reps}</span>
+          </div>`).join('')}
+      </div>
+    </section>`;
 }
 
-function openWorkoutSheet(root, state) {
-  const today = todayKey();
-  ui.openSheet((close) => {
-    const wrap = ui.el('div', { class: 'flex-col' });
-    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Log workout'));
-
-    const date = ui.el('input', { class: 'input', type: 'date', value: today });
-    const type = ui.el('select', { class: 'select' }, WORKOUT_TYPES.map((t) => ui.el('option', { value: t }, t)));
-    type.value = getSettings().gymDefaultType || 'Strength';
-    type.addEventListener('change', () => saveSettings({ gymDefaultType: type.value }));
-    const duration = ui.el('input', { class: 'input', type: 'number', min: 0, placeholder: 'Duration (minutes)' });
-    const notes = ui.el('textarea', { class: 'textarea', placeholder: 'Notes (optional)', style: { minHeight: 56 } });
-
-    const exercisesWrap = ui.el('div', { class: 'flex-col' });
-    function exerciseRow(ex = {}) {
-      const row = ui.el('div', { class: 'form-grid' }, [
-        ui.el('input', { class: 'input', placeholder: 'Exercise', value: ex.exerciseName || '', id: 'ex-name' }),
-        ui.el('input', { class: 'input', type: 'number', min: 0, placeholder: 'Sets', value: ex.sets || '' }),
-        ui.el('input', { class: 'input', type: 'number', min: 0, placeholder: 'Reps', value: ex.reps || '' }),
-        ui.el('input', { class: 'input', type: 'number', min: 0, placeholder: 'Weight (kg)', value: ex.weight || '' }),
-      ]);
-      row.style.display = 'grid';
-      return row;
-    }
-    exercisesWrap.append(exerciseRow());
-
-    const addExercise = ui.el('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, ui.icon('plus', 15) + ' Add exercise');
-    addExercise.addEventListener('click', () => exercisesWrap.append(exerciseRow()));
-
-    const error = ui.el('div', { style: { fontSize: 'var(--fs-sm)', color: 'var(--danger)', minHeight: 18 } });
-    const save = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button' }, 'Save workout');
-    save.addEventListener('click', async () => {
-      const exercises = [...exercisesWrap.querySelectorAll(':scope > .form-grid')]
-        .map((rowEl) => {
-          const [nameEl, setsEl, repsEl, weightEl] = rowEl.querySelectorAll('input');
-          return {
-            exerciseName: nameEl.value,
-            sets: Number(setsEl.value) || 0,
-            reps: Number(repsEl.value) || 0,
-            weight: Number(weightEl.value) || 0,
-          };
-        })
-        .filter((ex) => ex.exerciseName || ex.sets || ex.reps || ex.weight);
-      if (!exercises.length && !duration.value && !notes.value) {
-        error.textContent = 'Add an exercise or a duration to log the session.';
-        return;
-      }
-      const workout = await gym.addWorkout({
-        date: date.value || today,
-        workoutType: type.value,
-        duration: Number(duration.value) || 0,
-        notes: notes.value,
-        exercises,
-      });
-      state.workouts = gym.sortWorkouts([workout, ...state.workouts]);
-      checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
-      ui.haptic();
-      ui.toast('Workout saved', 'success');
-      close();
-      render(root, state);
-    });
-
-    wrap.append(
-      ui.el('div', { class: 'form-grid' }, [
-        ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Date'), date]),
-        ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Type'), type]),
-      ]),
-      ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Duration'), duration]),
-      ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Exercises'), exercisesWrap, addExercise]),
-      ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Notes'), notes]),
-      error,
-      save
-    );
-    return wrap;
-  });
+function weeklyVolumeSection(volume, maxMinutes) {
+  return `
+    <section class="section stagger">
+      <div class="section-head"><h3 class="section-title" style="font-size:var(--fs-lg)">Weekly volume</h3></div>
+      <div class="card">
+        <div class="bars" style="height:130px">
+          ${volume.map((v) => `
+            <div class="bar-col">
+              <div class="bar-value">${v.minutes > 0 ? `${Math.round(v.minutes / 60 * 10) / 10}h` : ''}</div>
+              <div class="bar ${v.minutes > 0 ? 'done' : ''}" data-volbar style="height:${Math.max(2, (v.minutes / maxMinutes) * 100)}%"></div>
+              <div class="bar-label">${v.label}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+    </section>`;
 }

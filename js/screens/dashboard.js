@@ -14,6 +14,7 @@ import { avatarMarkup } from '../personalization.js';
 import * as water from '../water.js';
 import * as goals from '../goals.js';
 import * as gym from '../gym.js';
+import * as gymTemplates from '../gymTemplates.js';
 import * as journal from '../journal.js';
 import * as photos from '../photos.js';
 import * as history from '../history.js';
@@ -380,6 +381,30 @@ function renderGymCard(root, state) {
         </div>
       </div>
     </div>`;
+
+  // V1.4 — active workout in progress? Surface it first (§25). Runs after the
+  // card markup is in place; re-rendering the card (refreshSections) re-runs
+  // this, so the state can never go stale.
+  gymTemplates.getActiveWorkout().then((active) => {
+    const inner = node.querySelector('.card.card-interactive');
+    if (!node.isConnected || !inner) return;
+    if (active) {
+      const total = active.exercises.length;
+      const done = active.exercises.filter((ex) => ex.sets.length && ex.sets.every((s) => s.done)).length;
+      inner.innerHTML = `
+        <div class="flex-between">
+          <div class="flex-col" style="gap:6px">
+            <div class="flex-row" style="gap:8px">
+              <span class="pill pill-warning">${ui.icon('timer', 12)} Workout in progress</span>
+              ${stats.streak > 0 ? `<span class="pill pill-accent">${ui.icon('flame', 12)} ${stats.streak}</span>` : ''}
+            </div>
+            <div style="font-weight:700">${ui.escapeHtml(active.templateName || 'Workout')}</div>
+            <div class="muted" style="font-size:var(--fs-sm);font-weight:600">${done} / ${total} exercises · tap to continue</div>
+          </div>
+          <span class="btn btn-primary btn-sm">Continue</span>
+        </div>`;
+    }
+  }).catch(() => {});
 }
 
 function renderJournalCard(root, state) {

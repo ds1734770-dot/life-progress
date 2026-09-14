@@ -2,7 +2,7 @@
  * App settings — single cached record plus theme handling.
  */
 import { dbGet, dbPut } from './db.js';
-import { defaultSettings } from './models.js';
+import { defaultSettings, gymDefaults } from './models.js';
 import { normalizeAvatar } from './personalization.js';
 
 let settings = null;
@@ -36,6 +36,10 @@ function withDefaults(stored) {
   }
   s.avatar = normalizeAvatar(s.avatar);
   if (!(s.avatarImage instanceof Blob)) s.avatarImage = null;
+  // --- V1.4 gym templates (rest timer) ---
+  const gymD = gymDefaults();
+  if (!Number.isFinite(s.restTimerSeconds) || s.restTimerSeconds < 0) s.restTimerSeconds = gymD.restTimerSeconds;
+  if (typeof s.restAutoStart !== 'boolean') s.restAutoStart = gymD.restAutoStart;
   // --- V1.3 smart progress camera ---
   if (typeof s.photoTemplateId !== 'string' || !s.photoTemplateId) s.photoTemplateId = null;
   s.photoAutoCapture = s.photoAutoCapture !== false;

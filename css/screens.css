@@ -1998,3 +1998,382 @@
   font-weight: 700;
   color: var(--warning);
 }
+
+/* ============================================================
+   V1.4 — GYM TEMPLATES + SET-BASED WORKOUT SESSION
+   ============================================================ */
+
+/* Resume banner (unfinished workout) */
+.gym-resume-card {
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  cursor: pointer;
+}
+.gym-resume-discard {
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 6px 0;
+}
+.gym-resume-discard:hover {
+  color: var(--danger);
+}
+
+/* Template cards */
+.gym-template-card .gym-template-last {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.gym-start-btn {
+  flex-shrink: 0;
+}
+
+/* Ordered number bubble */
+.gym-order-num {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sticky primary action above the bottom dock */
+.gym-sticky-actions {
+  position: sticky;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
+  z-index: 5;
+}
+
+/* Detail/management action rows */
+.gym-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+}
+.gym-action-row:last-child {
+  border-bottom: none;
+}
+.gym-action-row:active {
+  opacity: 0.7;
+}
+.gym-action-danger {
+  color: var(--danger);
+}
+
+/* Exercise picker grid (create + add-during-workout) */
+.gym-pick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  margin-top: 10px;
+}
+.gym-pick-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--r-m);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  text-align: left;
+  min-height: 44px;
+  transition: transform var(--d-fast) var(--spring), background var(--d-fast) var(--ease);
+}
+.gym-pick-item:active {
+  transform: scale(0.96);
+  background: var(--surface-3);
+}
+.gym-pick-name {
+  font-weight: 700;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.gym-pick-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+/* Template editor rows */
+.gym-pick-row {
+  margin-bottom: 0;
+}
+.gym-drag-handle {
+  width: 36px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--text-3);
+  touch-action: none; /* the handle drives dragging, not the page */
+}
+.gym-drag-handle:disabled {
+  opacity: 0.35;
+}
+.gym-drag-slots {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  min-height: 14px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Session header elapsed timer */
+.gym-session-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gym-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Exercise blocks + set rows */
+.gym-exercise {
+  margin-bottom: 12px;
+}
+.gym-set-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gym-set-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r-m);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.gym-set-row.done {
+  background: color-mix(in srgb, var(--success) 10%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+.gym-set-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.gym-set-row.done .gym-set-label {
+  color: var(--success);
+}
+
+/* Weight/reps stepper */
+.gym-stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px;
+  min-width: 0;
+}
+.gym-step-btn {
+  width: 34px;
+  height: 38px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-2);
+  transition: background var(--d-fast) var(--ease), color var(--d-fast) var(--ease);
+}
+.gym-step-btn:active {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.gym-step-input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-weight: 800;
+  font-size: var(--fs-md);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  padding: 0;
+}
+.gym-step-input:focus {
+  outline: none;
+}
+/* Hide native number spinners — steppers + typing both work */
+.gym-step-input::-webkit-outer-spin-button,
+.gym-step-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.gym-step-input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.gym-step-unit {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-3);
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+
+/* Completion circle */
+.gym-set-toggle {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--on-accent);
+  transition: transform var(--d-fast) var(--spring), background var(--d-fast) var(--ease),
+    border-color var(--d-fast) var(--ease);
+}
+.gym-set-toggle[aria-pressed='true'] {
+  background: var(--success);
+  border-color: var(--success);
+}
+.gym-set-toggle:active {
+  transform: scale(0.88);
+}
+@keyframes gymSetDone {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+/* Beat last time pill */
+.gym-beat-pill {
+  flex-shrink: 0;
+}
+
+/* Rest timer strip */
+.gym-rest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-top: 12px;
+  border-radius: var(--r-m);
+  background: color-mix(in srgb, var(--info) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--info) 25%, transparent);
+}
+.gym-rest-label {
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--info);
+}
+.gym-rest-clock {
+  font-size: var(--fs-lg);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  flex: 1;
+}
+
+/* Completion summary */
+.gym-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding-top: var(--sp-6);
+}
+.gym-summary-badge {
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  margin-bottom: var(--sp-4);
+}
+.gym-summary .exercise-row {
+  text-align: left;
+}
+.gym-summary .card {
+  width: 100%;
+  text-align: left;
+}
+
+/* Narrow screens: set rows compress gracefully */
+@media (max-width: 359px) {
+  .gym-set-row {
+    grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 40px;
+    gap: 6px;
+    padding: 6px;
+  }
+  .gym-step-btn {
+    width: 28px;
+    height: 36px;
+  }
+  .gym-set-toggle {
+    width: 40px;
+    height: 40px;
+  }
+  .gym-pick-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Larger screens keep the phone feel centered */
+@media (min-width: 768px) {
+  .gym-pick-grid {
+    max-width: 560px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* Reduced motion — no row pulse */
+@media (prefers-reduced-motion: reduce) {
+  .gym-set-row {
+    animation: none !important;
+  }
+  .gym-set-toggle,
+  .gym-step-btn,
+  .gym-pick-item {
+    transition: none;
+  }
+
