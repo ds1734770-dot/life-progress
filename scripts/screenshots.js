@@ -280,6 +280,54 @@ try {
   await evaluate(`(async () => { const s = await import('/js/settings.js'); await s.saveSettings({ theme: 'dark' }); })()`);
   await sleep(400);
 
+  // ---- V1.4.1 gym states (§33): editable inputs, set removal, custom exercises
+  // Fresh active session pre-filled from the seeded history.
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-template-card')].find((n) => n.textContent.includes('Push Day'))?.click(); true })()`);
+  await waitFor(`!!document.querySelector('[data-action="start"]')`, 6000);
+  await click('[data-action="start"]');
+  await waitFor(`document.querySelectorAll('.gym-exercise').length >= 3`, 8000);
+  await shot('gym141-editable-sets');
+  // Decimal weight typed in + a completed set.
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelector('.gym-set-row');
+    const w = row.querySelector('[aria-label^="Weight"]');
+    w.value = '62.5'; w.dispatchEvent(new Event('change'));
+    true;
+  })()`);
+  await evaluate(`(() => { [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelector('.gym-set-toggle')?.click(); true })()`);
+  await sleep(600);
+  await shot('gym141-decimal-completed');
+  // Set removal state: dialog open over the session.
+  await evaluate(`(() => { document.querySelector('.gym-set-remove:not([disabled])')?.click(); true })()`);
+  await waitFor(`!!document.querySelector('.dialog')`, 5000);
+  await sleep(400);
+  await shot('gym141-remove-set-dialog');
+  await evaluate(`(() => { [...document.querySelectorAll('.dialog button')].find((b) => b.textContent.includes('Remove set'))?.click(); true })()`);
+  await sleep(500);
+  // Picker with the create entry point.
+  await click('[data-action="add-exercise"]');
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000);
+  await shot('gym141-picker-create');
+  // Create-exercise sheet.
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Create New Exercise'))?.click(); true })()`);
+  await waitFor(`!!document.querySelector('.sheet input[aria-label="Exercise name"]')`, 5000);
+  await evaluate(`(() => { const i = document.querySelector('.sheet input[aria-label="Exercise name"]'); i.value = 'Cable Chest Fly'; i.dispatchEvent(new Event('input')); true })()`);
+  await sleep(300);
+  await shot('gym141-create-exercise');
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Add Exercise'))?.click(); true })()`);
+  await waitFor(`!![...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Cable Chest Fly'))`, 6000);
+  await shot('gym141-custom-in-workout');
+  // Search finds the custom exercise.
+  await click('[data-action="add-exercise"]');
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000);
+  await evaluate(`(() => { const s = document.querySelector('.sheet input[type=search]'); s.value = 'cable'; s.dispatchEvent(new Event('input')); true })()`);
+  await sleep(400);
+  await shot('gym141-search-custom');
+  await evaluate(`(() => { document.querySelector('.sheet [data-sheet-close]')?.click(); true })()`);
+  await sleep(300);
+  await evaluate(`(async () => { const gt = await import('/js/gymTemplates.js'); await gt.clearActiveWorkout(); const r = await import('/js/router.js'); r.go('gym'); })()`);
+  await sleep(600);
+
   // Dark theme screenshots
   const darkScreens = [
     ['dashboard', 'dashboard'],

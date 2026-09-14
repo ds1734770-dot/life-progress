@@ -343,6 +343,130 @@ try {
     return row?.querySelector('[aria-label^="Weight"]')?.value === '8';
   })()`));
 
+  // ---- 5b. Direct typed input (V1.4.1 §2–§4) -------------------------------
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise')).querySelector('.gym-set-row');
+    const w = row.querySelector('[aria-label^="Weight"]');
+    w.value = '7.5';
+    w.dispatchEvent(new Event('change'));
+  })()`);
+  await sleep(400);
+  check('typed decimal weight persists to the session (7.5)', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const s = await gt.getActiveWorkout();
+      const ex = s.exercises.find((e) => e.exerciseName === 'Lateral Raise');
+      return ex?.sets[0].weight === 7.5;
+    })()
+  `));
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise')).querySelector('.gym-set-row');
+    const r = row.querySelector('[aria-label^="Reps"]');
+    r.value = '';
+    r.dispatchEvent(new Event('change'));
+  })()`);
+  await sleep(400);
+  check('clearing the reps input is safe (persists 0, no crash)', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const s = await gt.getActiveWorkout();
+      return s.exercises.find((e) => e.exerciseName === 'Lateral Raise')?.sets[0].reps === 0;
+    })()
+  `));
+
+  // ---- 5c. Set deletion (V1.4.1 §7–§9) --------------------------------------
+  await evaluate(`(() => {
+    const ex = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'));
+    ex.querySelector('[data-role="add-set"]').click();
+  })()`);
+  await sleep(400);
+  await evaluate(`(() => {
+    const ex = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'));
+    ex.querySelectorAll('.gym-set-remove')[0].click();
+  })()`);
+  await waitFor(`!!document.querySelector('.dialog')`, 5000, 'remove-set dialog');
+  check('set removal asks for confirmation', await evaluate(`!!document.querySelector('.dialog')`));
+  console.log('  [remove-dialog]', await evaluate(`JSON.stringify({ title: document.querySelector('.dialog div')?.textContent, buttons: [...document.querySelectorAll('.dialog button')].map((b) => b.textContent) })`));
+  await evaluate(`(() => { [...document.querySelectorAll('.dialog button')].find((b) => b.textContent.includes('Remove set'))?.click(); })()`);
+  await sleep(500);
+  console.log('  [after-confirm]', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const s = await gt.getActiveWorkout();
+      return JSON.stringify({ dialog: !!document.querySelector('.dialog'), sets: s.exercises.map((e) => e.exerciseName + ':' + e.sets.length) });
+    })()
+  `));
+  // Lateral Raise pre-fills 3 sets from history; add-set → 4, remove → 3.
+  check('set deleted (4 → 3 rows)', await evaluate(`
+    [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'))?.querySelectorAll('.gym-set-row').length === 3
+  `));
+  check('renumbering: first row reads Set 1', await evaluate(`
+    [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'))?.querySelector('.gym-set-label')?.textContent === 'Set 1'
+  `));
+  // Min-1 rule: remove down to a single set — Remove must disable there.
+  for (let i = 0; i < 3; i++) {
+    const gone = await evaluate(`(() => {
+      const ex = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'));
+      const btn = ex?.querySelector('.gym-set-remove:not([disabled])');
+      if (!btn) return 'none-left';
+      btn.click();
+      return 'clicked';
+    })()`);
+    if (gone !== 'clicked') break;
+    await waitFor(`!!document.querySelector('.dialog')`, 5000, 'remove dialog');
+    await evaluate(`(() => { [...document.querySelectorAll('.dialog button')].find((b) => b.textContent.includes('Remove set'))?.click(); })()`);
+    await sleep(600);
+  }
+  check('removing down to one set leaves exactly 1 (min-1 rule)', await evaluate(`
+    [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'))?.querySelectorAll('.gym-set-row').length === 1
+  `));
+  check('single set disables Remove (min-1 rule)', await evaluate(`
+    [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Lateral Raise'))?.querySelector('.gym-set-remove')?.disabled === true
+  `));
+
+  // ---- 5d. Create New Exercise (V1.4.1 §11–§18) -----------------------------
+  await click('[data-action="add-exercise"]');
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000, 'picker for create');
+  check('picker offers Create New Exercise', await evaluate(`
+    [...document.querySelectorAll('.sheet button')].some((b) => b.textContent.includes('Create New Exercise'))
+  `));
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Create New Exercise'))?.click(); })()`);
+  await waitFor(`!!document.querySelector('.sheet input[aria-label="Exercise name"]')`, 5000, 'create sheet');
+  check('create exercise sheet opens', await evaluate(`!!document.querySelector('.sheet input[aria-label="Exercise name"]')`));
+  await evaluate(`(() => { const i = document.querySelector('.sheet input[aria-label="Exercise name"]'); i.value = 'Cable Chest Fly'; i.dispatchEvent(new Event('input')); })()`);
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Add Exercise'))?.click(); })()`);
+  await waitFor(`!![...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Cable Chest Fly'))`, 6000, 'custom exercise added');
+  check('custom exercise lands in the session', await evaluate(`
+    !![...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Cable Chest Fly'))
+  `));
+  check('custom exercise saved to the library store', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const lib = await gt.getLibrary();
+      return lib.some((e) => e.name === 'Cable Chest Fly');
+    })()
+  `));
+  // Duplicate detection: creating the same name again must not duplicate.
+  await click('[data-action="add-exercise"]');
+  await waitFor(`!!document.querySelector('.sheet input[type=search]')`, 6000, 'picker for dup');
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Create New Exercise'))?.click(); })()`);
+  await waitFor(`!!document.querySelector('.sheet input[aria-label="Exercise name"]')`, 5000, 'create sheet 2');
+  await evaluate(`(() => { const i = document.querySelector('.sheet input[aria-label="Exercise name"]'); i.value = 'cable chest fly'; i.dispatchEvent(new Event('input')); })()`);
+  await evaluate(`(() => { [...document.querySelectorAll('.sheet button')].find((b) => b.textContent.includes('Add Exercise'))?.click(); })()`);
+  await sleep(800);
+  check('duplicate (case-insensitive) is rejected, library stays single', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const lib = await gt.getLibrary();
+      return lib.filter((e) => e.name.toLowerCase() === 'cable chest fly').length === 1;
+    })()
+  `));
+  check('adding an exercise already in the session does not duplicate it', await evaluate(`
+    [...document.querySelectorAll('.gym-exercise')].filter((n) => n.textContent.includes('Cable Chest Fly')).length === 1
+  `));
+  await evaluate(`(() => { document.querySelector('.sheet [data-sheet-close]')?.click(); true })()`);
+  await sleep(400);
+
   // ---- 6. Reload resume (§20) ----------------------------------------------
   await dumpState('before reload');
   // CDP Page.reload (location.reload() never resolves under awaitPromise).

@@ -2377,3 +2377,97 @@
     transition: none;
   }
 
+
+/* ---------------------------------------------------------------------------
+   V1.4.1 — set rows: obvious editable inputs + guarded set removal
+   --------------------------------------------------------------------------- */
+/* Column header aligned with the set-row grid (hidden from AT — rows have
+   full aria-labels). */
+.gym-set-header {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 76px;
+  gap: 8px;
+  padding: 0 8px 2px;
+  font-size: var(--fs-2xs, 10px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+/* Actions cell holds the complete-toggle and remove button side by side. */
+.gym-set-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* Remove is a quiet affordance — visible, but not competing with ✓. */
+.gym-set-remove {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  transition: color var(--d-fast) var(--ease), background var(--d-fast) var(--ease);
+}
+.gym-set-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.gym-set-remove:active { transform: scale(0.92); }
+.gym-set-remove:disabled { opacity: 0.25; pointer-events: none; }
+.gym-set-row.done .gym-set-remove { opacity: 0.6; }
+
+/* The value between − / + must LOOK editable: strong field, big numbers. */
+.gym-stepper {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 3px;
+}
+.gym-stepper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.gym-step-input {
+  font-size: var(--fs-lg);
+  min-width: 0;
+  cursor: text;
+}
+.gym-step-input:focus {
+  outline: none;
+}
+.gym-step-input::placeholder {
+  color: var(--text-3);
+  font-weight: 700;
+}
+.gym-step-btn {
+  width: 30px;
+  height: 36px;
+  font-size: 17px;
+}
+
+/* Narrow phones: stack each stepper's controls vertically so the input keeps
+   a usable width instead of collapsing. */
+@media (max-width: 379px) {
+  .gym-set-row {
+    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px;
+  }
+  .gym-set-header { grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px; }
+  .gym-set-actions { flex-direction: column; gap: 2px; }
+  .gym-set-remove { width: 28px; height: 24px; }
+  .gym-step-btn { width: 26px; }
+  .gym-step-unit { display: none; } /* kg/reps live in the column header */
+}
+
+/* Create-new-exercise entry point inside the picker sheet. */
+.gym-pick-create {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--r-m) var(--r-m);
+  padding-top: 14px;
+  color: var(--accent);
+  font-weight: 700;
+  justify-content: center;
+}

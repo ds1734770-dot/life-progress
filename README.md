@@ -273,7 +273,12 @@ new assets.
   active-workout record, completion summary with PR detection, streak/achievement
   continuity, template deletion preserving history, export/wipe/import of the
   new stores, 320–1024px overflow, light theme, reduced motion and zero console
-  errors.
+  errors. V1.4.1 adds: directly typed weight/reps (including decimals like
+  62.5, cleared and re-typed values), per-set Remove with guarded confirmation,
+  correct renumbering and value preservation after deletion, the min-1-set
+  rule, and the full custom-exercise journey — create from the picker,
+  duplicate-name reuse (case-insensitive), persistence across reload,
+  search discovery, session/template integration and pre-fill from history.
 - Screenshots (`npm run screenshots`, `npm run screenshots:camera`) are written
   to `screenshots/`.
 
@@ -292,12 +297,15 @@ recedes from "fill out a form" to "choose the workout I'm doing today":
   its most recent recorded performance (§9); historical workouts are never
   mutated, and the empty-workout flow (`#/gym/new`, dashboard quick action)
   remains available.
-- **Set-based logging** — per-set weight/reps steppers with real gym
-  increments (2.5 kg below 100 kg, 5 kg above), tap-to-complete with reduced
-  motion support, add/remove sets and exercises for TODAY only (skipping an
-  exercise never edits the template), rest timer (optional, dismissible),
-  beat-last-time pills and honest PR detection (strict improvement over real
-  history; first-ever performances set the baseline, they don't invent PRs).
+- **Set-based logging** — per-set weight/reps with both steppers and directly
+  editable numeric inputs (`inputmode="decimal"` for weight, integer for reps;
+  0.5 kg precision preserved), persisted to the active workout on edit so
+  values survive navigation and reload, tap-to-complete with reduced motion
+  support, add/remove sets (guarded confirmation, min-1 rule, renumbering)
+  and exercises for TODAY only (skipping an exercise never edits the
+  template), rest timer (optional, dismissible), beat-last-time pills and
+  honest PR detection (strict improvement over real history; first-ever
+  performances set the baseline, they don't invent PRs).
 - **Resume** — unfinished sessions persist in the active-workout record and
   survive reload/offline; the gym home shows a WELCOME BACK banner with a
   guarded Discard action.
@@ -306,15 +314,39 @@ recedes from "fill out a form" to "choose the workout I'm doing today":
 - **Migration aid** — any completed workout can be saved as a template from
   the session summary (SAVE AS TEMPLATE).
 
+**V1.4.1 — session polish (additive).** Two usability fixes on top of V1.4:
+
+- **Editable set values** — the weight and reps in every set row are real
+  numeric inputs (steppers remain). Weight accepts decimals down to 0.5 kg
+  precision; reps are positive integers. Edits update the in-memory session
+  immediately and persist to the active-workout record on input/blur, so a
+  half-typed value survives navigation and reload without waiting for
+  completion. Invalid input never crashes: empty cells keep the previous
+  value, negatives are clamped.
+- **Set deletion** — each set has a guarded Remove action (confirmation
+  dialog, no browser `alert()`). Deleting removes only that set, renumbers
+  the remaining rows and keeps their values/completion state; the last
+  remaining set cannot be deleted (use the existing exercise removal
+  instead). Historical workouts are never touched.
+- **User-created exercises** — both exercise pickers (mid-session and
+  template editor) end with a CREATE NEW EXERCISE action: name + optional
+  muscle group, saved into the existing `exerciseLibrary` store as a
+  first-class exercise. Custom exercises participate in search, templates,
+  sessions, pre-fill, history, PRs, export/import and wipe exactly like
+  predefined ones; duplicate names (case-insensitive) reuse the existing
+  record instead of creating a second one.
+
 Quality gate (all verified on the current commit):
 
-- `npm test` — 254/254 passing (adds the V1.4 template/session domain suite)
+- `npm test` — 270/270 passing (adds the V1.4 template/session domain suite
+  plus the V1.4.1 typed-input, set-deletion and custom-exercise suites)
 - `npm run smoke` — passing
 - `npm run qa`, `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
-- `npm run qa:gym` — all gym redesign checks passing
+- `npm run qa:gym` — 77/77 gym redesign + polish checks passing
 - `npm run qa:camera` — pre-existing headless mediapipe flake on this machine
   (fails identically on the clean tree); all camera checks pass on hardware
-- `npm run screenshots` — 13 gym-state captures (§43) alongside the existing set
+- `npm run screenshots` — 20 gym-state captures (V1.4 + V1.4.1 typed inputs,
+  set deletion, custom-exercise flows) alongside the existing set
 
 ---
 

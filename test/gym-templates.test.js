@@ -31,6 +31,8 @@ import {
   formatElapsed,
   stepWeight,
   reorderTemplateExercises,
+  isUniqueExerciseName,
+  groupLibraryEntries,
 } from '../js/gymTemplates.js';
 import { makeWorkout, makeTemplateExercise, makeWorkoutTemplate, makeActiveWorkout, makeSessionExercise, sessionCompletable } from '../js/models.js';
 
@@ -345,4 +347,159 @@ test('empty session has no template linkage and no exercises', () => {
   assert.equal(s.templateId, null);
   assert.equal(s.exercises.length, 0);
   assert.equal(sessionCompletable(s), false);
+});
+
+// ---------------------------------------------------------------------------
+// V1.4.1 — set value editing + validation semantics (§2–§6)
+// ---------------------------------------------------------------------------
+
+test('updateSet accepts decimal weights typed directly (42.5, 62.5)', () => {
+  const s = sessionWithBench();
+  const a = updateSet(s, s.exercises[0].id, 0, { weight: 42.5 });
+  assert.equal(a.exercises[0].sets[0].weight, 42.5);
+  const b = updateSet(s, s.exercises[0].id, 1, { weight: 62.5 });
+  assert.equal(b.exercises[0].sets[1].weight, 62.5);
+});
+
+test('updateSet treats empty/cleared input as 0 without crashing', () => {
+  const s = sessionWithBench();
+  const next = updateSet(s, s.exercises[0].id, 0, { weight: NaN, reps: NaN });
+  assert.equal(next.exercises[0].sets[0].weight, 0);
+  assert.equal(next.exercises[0].sets[0].reps, 0);
+});
+
+test('updateSet rejects negative weight/reps', () => {
+  const s = sessionWithBench();
+  const next = updateSet(s, s.exercises[0].id, 0, { weight: -20, reps: -3 });
+  assert.equal(next.exercises[0].sets[0].weight, 0);
+  assert.equal(next.exercises[0].sets[0].reps, 0);
+});
+
+test('reps normalize to integers; weight keeps 0.5 steps', () => {
+  const s = sessionWithBench();
+  const next = updateSet(s, s.exercises[0].id, 0, { weight: 60.3, reps: 8.7 });
+  assert.equal(next.exercises[0].sets[0].weight, 60.5);
+  assert.equal(next.exercises[0].sets[0].reps, 9);
+});
+
+test('stepWeight keeps 0.5 kg increments below 100 kg and 5 kg above', () => {
+  assert.equal(stepWeight(60, 1), 62.5);
+  assert.equal(stepWeight(62.5, 1), 65);
+  assert.equal(stepWeight(60, -1), 57.5);
+  assert.equal(stepWeight(100, 1), 105);
+});
+
+// ---------------------------------------------------------------------------
+// V1.4.1 — set deletion combinations (§7–§10)
+// ---------------------------------------------------------------------------
+
+function fourSetSession() {
+  const s = buildEmptySession();
+  const withSets = addSessionExercise(s, 'Chest Fly');
+  withSets.exercises[0].sets = [
+    { weight: 20, reps: 12, done: true },
+    { weight: 20, reps: 12, done: false },
+    { weight: 22.5, reps: 10, done: true },
+    { weight: 22.5, reps: 10, done: false },
+  ];
+  return withSets;
+}
+
+test('delete first set keeps remaining values and completion state', () => {
+  const s = fourSetSession();
+  const next = removeSet(s, s.exercises[0].id, 0);
+  assert.equal(next.exercises[0].sets.length, 3);
+  assert.deepEqual(next.exercises[0].sets.map((x) => x.weight), [20, 22.5, 22.5]);
+  assert.deepEqual(next.exercises[0].sets.map((x) => x.done), [false, true, false]);
+});
+
+test('delete middle set keeps first and last untouched', () => {
+  const s = fourSetSession();
+  const next = removeSet(s, s.exercises[0].id, 1);
+  assert.equal(next.exercises[0].sets.length, 3);
+  assert.deepEqual(next.exercises[0].sets.map((x) => [x.weight, x.done]), [[20, true], [22.5, true], [22.5, false]]);
+});
+
+test('delete last set of many', () => {
+  const s = fourSetSession();
+  const next = removeSet(s, s.exercises[0].id, 3);
+  assert.equal(next.exercises[0].sets.length, 3);
+  assert.equal(next.exercises[0].sets[2].weight, 22.5);
+});
+
+test('delete set after editing values of remaining sets', () => {
+  let s = fourSetSession();
+  s = updateSet(s, s.exercises[0].id, 0, { weight: 25, reps: 8 });
+  s = removeSet(s, s.exercises[0].id, 2);
+  assert.equal(s.exercises[0].sets.length, 3);
+  assert.equal(s.exercises[0].sets[0].weight, 25);
+  assert.equal(s.exercises[0].sets[0].reps, 8);
+});
+
+test('delete set after adding a set (index integrity)', () => {
+  let s = fourSetSession();
+  s = addSet(s, s.exercises[0].id);
+  assert.equal(s.exercises[0].sets.length, 5);
+  s = removeSet(s, s.exercises[0].id, 4);
+  assert.equal(s.exercises[0].sets.length, 4);
+  assert.equal(s.exercises[0].sets[4 - 1].weight, 22.5);
+});
+
+test('minimum-set rule: deleting the final set resets it instead of emptying', () => {
+  const s = fourSetSession();
+  let one = removeSet(s, s.exercises[0].id, 0);
+  one = removeSet(one, one.exercises[0].id, 0);
+  one = removeSet(one, one.exercises[0].id, 0);
+  assert.equal(one.exercises[0].sets.length, 1, 'never zero sets');
+});
+
+test('completed session volume is unchanged by which sets were removed later', () => {
+  // Historical conversion always happens from the session's own sets —
+  // deletion of active-session sets can never touch stored history.
+  const s = fourSetSession();
+  const workout = completeSession(s);
+  assert.equal(workout.exercises[0].sets, 4);
+});
+
+// ---------------------------------------------------------------------------
+// V1.4.1 — custom exercise helpers (§11–§21, pure logic)
+// ---------------------------------------------------------------------------
+
+test('isUniqueExerciseName is case-insensitive and whitespace tolerant', () => {
+  const taken = ['Chest Fly', 'Lat Pulldown'];
+  assert.equal(isUniqueExerciseName('chest fly', taken), false);
+  assert.equal(isUniqueExerciseName('  CHEST FLY  ', taken), false);
+  assert.equal(isUniqueExerciseName('Cable Chest Fly', taken), true);
+  assert.equal(isUniqueExerciseName('', taken), false);
+  assert.equal(isUniqueExerciseName('   ', taken), false);
+});
+
+test('groupLibraryEntries separates single-use entries (custom) from used ones', () => {
+  const entries = [
+    { name: 'Cable Chest Fly', key: 'cable chest fly', useCount: 1, usedAt: 3 },
+    { name: 'Bench Press', key: 'bench press', useCount: 5, usedAt: 2 },
+    { name: 'Squat', key: 'squat', useCount: 1, usedAt: 1 },
+  ];
+  const { custom, rest } = groupLibraryEntries(entries);
+  assert.deepEqual(custom.map((e) => e.name), ['Cable Chest Fly', 'Squat']);
+  assert.deepEqual(rest.map((e) => e.name), ['Bench Press']);
+});
+
+test('custom exercise pre-fills from history exactly like predefined ones', () => {
+  const w = workoutOn('2026-09-08', [{ exerciseName: 'Cable Chest Fly', sets: 3, reps: 12, weight: 20 }]);
+  const tex = makeTemplateExercise({ exerciseName: 'Cable Chest Fly', defaultSets: 3 });
+  const rows = prefillSetsForExercise(tex, [w], { beforeDate: TODAY });
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((r) => [r.weight, r.reps]), [[20, 12], [20, 12], [20, 12]]);
+});
+
+test('custom exercise earns PRs and feeds volume like any exercise', () => {
+  const history = workoutOn('2026-09-08', [{ exerciseName: 'Cable Chest Fly', sets: 3, reps: 12, weight: 20 }]);
+  const session = buildEmptySession();
+  const withCustom = addSessionExercise(session, 'Cable Chest Fly', [{ weight: 22.5, reps: 12 }, { weight: 22.5, reps: 12 }]);
+  withCustom.exercises[0].sets.forEach((x) => (x.done = true));
+  const prs = sessionPRs(withCustom, [history], { today: TODAY });
+  assert.equal(prs.length, 1);
+  assert.equal(prs[0].exerciseName, 'Cable Chest Fly');
+  assert.equal(prs[0].weightDelta, 2.5);
 });

@@ -13,7 +13,7 @@
  */
 import * as gym from '../gym.js';
 import * as gymT from '../gymTemplates.js';
-import { sessionCompletable } from '../models.js';
+import { sessionCompletable, MUSCLE_GROUPS } from '../models.js';
 import { checkAchievementsNow } from '../celebration.js';
 import { getSettings } from '../settings.js';
 import * as ui from '../ui.js';
@@ -147,6 +147,9 @@ function renderExercises(root, state) {
           </div>
           ${beatPill(bestToday, prevBest)}
         </div>
+        <div class="gym-set-header" aria-hidden="true">
+          <span>SET</span><span>KG</span><span>REPS</span><span></span>
+        </div>
         <div class="gym-set-list" role="list" aria-label="${ui.escapeHtml(ex.exerciseName)} sets"></div>
         <div class="flex-row" style="gap:8px;margin-top:10px">
           <button class="btn btn-ghost btn-sm" data-role="add-set">${ui.icon('plus', 14)} Add set</button>
@@ -158,7 +161,7 @@ function renderExercises(root, state) {
       `;
 
       const setList = card.querySelector('.gym-set-list');
-      ex.sets.forEach((set, i) => setList.append(setRow(state, ex, i, set, prevBest)));
+      ex.sets.forEach((set, i) => setList.append(setRow(root, state, ex, i, set, prevBest)));
 
       card.querySelector('[data-role="add-set"]').addEventListener('click', () => {
         mutate(root, state, gymT.addSet(state.session, ex.id));
@@ -191,29 +194,39 @@ function renderExercises(root, state) {
   }
 }
 
-/** One set row: weight stepper, reps stepper, tap-to-complete circle. */
-function setRow(state, ex, index, set, prevBest) {
+/**
+ * One set row: − [ editable input ] unit +  for weight and reps, tap-to-
+ * complete circle, and a guarded remove action (V1.4.1). The value between
+ * the steppers is a REAL number input — tap, type, replace, delete — with
+ * 0.5 kg weight precision preserved. Empty input shows a visible dash
+ * placeholder; persistence happens on change/blur (controlled writes).
+ */
+function setRow(root, state, ex, index, set, prevBest) {
   const row = ui.el('div', { class: `gym-set-row${set.done ? ' done' : ''}`, role: 'listitem' });
   row.innerHTML = `
     <span class="gym-set-label">Set ${index + 1}</span>
     <div class="gym-stepper" data-kind="weight">
       <button class="gym-step-btn" data-dir="-1" aria-label="Decrease weight">−</button>
-      <input class="gym-step-input" type="number" inputmode="decimal" step="0.5" min="0" value="${set.weight || ''}" placeholder="0" aria-label="Weight in kilograms for set ${index + 1}">
+      <input class="gym-step-input" type="number" inputmode="decimal" step="0.5" min="0" value="${set.weight || ''}" placeholder="—" aria-label="Weight in kilograms for set ${index + 1}">
       <span class="gym-step-unit">kg</span>
       <button class="gym-step-btn" data-dir="1" aria-label="Increase weight">+</button>
     </div>
     <div class="gym-stepper" data-kind="reps">
       <button class="gym-step-btn" data-dir="-1" aria-label="Decrease reps">−</button>
-      <input class="gym-step-input" type="number" inputmode="numeric" step="1" min="0" value="${set.reps || ''}" placeholder="0" aria-label="Reps for set ${index + 1}">
+      <input class="gym-step-input" type="number" inputmode="numeric" step="1" min="0" value="${set.reps || ''}" placeholder="—" aria-label="Reps for set ${index + 1}">
       <span class="gym-step-unit">reps</span>
       <button class="gym-step-btn" data-dir="1" aria-label="Increase reps">+</button>
     </div>
-    <button class="gym-set-toggle" aria-pressed="${set.done}" aria-label="${set.done ? `Set ${index + 1} completed — tap to unmark` : `Complete set ${index + 1}`}">
-      ${set.done ? ui.icon('check', 15) : ''}
-    </button>
+    <div class="gym-set-actions">
+      <button class="gym-set-toggle" aria-pressed="${set.done}" aria-label="${set.done ? `Set ${index + 1} completed — tap to unmark` : `Complete set ${index + 1}`}">
+        ${set.done ? ui.icon('check', 15) : ''}
+      </button>
+      <button class="gym-set-remove" aria-label="Remove set ${index + 1}" ${ex.sets.length <= 1 ? 'disabled' : ''} title="Remove set">${ui.icon('trash', 13)}</button>
+    </div>
   `;
 
-  // Steppers: ± with sensible gym increments.
+  // Steppers: ± with sensible gym increments; the input commits on
+  // change/blur so a mid-edit empty value never persists.
   row.querySelectorAll('.gym-stepper').forEach((stepper) => {
     const kind = stepper.dataset.kind;
     const input = stepper.querySelector('.gym-step-input');
@@ -225,13 +238,15 @@ function setRow(state, ex, index, set, prevBest) {
         if (kind === 'weight') next = gymT.stepWeight(current, dir);
         else next = Math.max(0, current + dir);
         input.value = next || '';
-        commit();
+        commitInput();
       });
     });
-    input.addEventListener('change', commit);
-    input.addEventListener('blur', commit);
+    input.addEventListener('change', commitInput);
+    input.addEventListener('blur', commitInput);
 
-    function commit() {
+    function commitInput() {
+      // Empty/invalid → 0 (inline-safe: no crash while the user clears the
+      // field mid-edit; change/blur only fire when editing ends).
       const val = Number(input.value) || 0;
       const patch = kind === 'weight' ? { weight: val } : { reps: val };
       state.session = gymT.updateSet(state.session, ex.id, index, patch);
@@ -239,8 +254,22 @@ function setRow(state, ex, index, set, prevBest) {
     }
   });
 
+  // Remove this set (guarded): min one set per exercise, confirm via dialog,
+  // only ever touches the ACTIVE session — history is never modified.
+  row.querySelector('.gym-set-remove').addEventListener('click', async () => {
+    if (ex.sets.length <= 1) return; // keep the data model valid (min-1 rule)
+    const ok = await ui.openDialog({
+      title: `Remove set ${index + 1}?`,
+      message: 'Only this set is removed — the other sets keep their values.',
+      confirmLabel: 'Remove set',
+      danger: true,
+    });
+    if (!ok) return;
+    mutate(root, state, gymT.removeSet(state.session, ex.id, index));
+  });
+
   // Tap the row's circle to complete the set (§18): immediate feedback +
-  // subtle animation + focus moves to the next logical set.
+  // subtle animation + rest timer.
   row.querySelector('.gym-set-toggle').addEventListener('click', () => {
     state.session = gymT.toggleSet(state.session, ex.id, index);
     gymT.persistActiveWorkout(state.session);
@@ -302,13 +331,20 @@ function openAddExercise(root, state) {
     wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Add exercise'));
 
     const search = ui.el('input', {
-      class: 'input', type: 'search', placeholder: 'Search or type a new exercise…',
+      class: 'input', type: 'search', placeholder: 'Search or type an exercise…',
       'aria-label': 'Search exercises', autocomplete: 'off',
     });
     const grid = ui.el('div', { class: 'gym-pick-grid', role: 'listbox', 'aria-label': 'Exercise results' });
     wrap.append(search, grid);
 
     const add = async (name) => {
+      // Duplicate guard (§18): adding an exercise already in today's session
+      // must never create a second block.
+      if (state.session.exercises.some((e) => e.exerciseName.toLowerCase() === name.toLowerCase())) {
+        ui.toast(`${name} is already in this workout`, 'info');
+        close();
+        return;
+      }
       await gymT.touchLibrary([name]);
       // Pre-fill from the exercise's most recent history where appropriate (§14).
       const history = gymT.lastTimeForExercise(state.workouts, name);
@@ -318,43 +354,95 @@ function openAddExercise(root, state) {
       mutate(root, state, next);
     };
 
-    const render = (q = '') => {
+    const render = async (q = '') => {
       const query = q.trim().toLowerCase();
       const inSession = new Set(state.session.exercises.map((e) => e.exerciseName.toLowerCase()));
+      const library = await gymT.getLibrary();
+      const historyNames = state.workouts.reduce((acc, w) => {
+        for (const ex of w.exercises || []) if (!acc.includes(ex.exerciseName)) acc.push(ex.exerciseName);
+        return acc;
+      }, []);
       const pool = [
-        ...state.workouts.reduce((acc, w) => {
-          for (const ex of w.exercises || []) if (!acc.includes(ex.exerciseName)) acc.push(ex.exerciseName);
-          return acc;
-        }, []),
-        ...gymT.SUGGESTED_EXERCISES,
+        ...library.map((e) => ({ name: e.name, sub: e.muscleGroup, tag: 'My exercise' })),
+        ...historyNames.map((n) => ({ name: n, sub: gymT.guessMuscleGroup(n), tag: 'Recent' })),
+        ...gymT.SUGGESTED_EXERCISES.map((n) => ({ name: n, sub: gymT.guessMuscleGroup(n), tag: '' })),
       ];
       const seen = new Set();
-      const items = pool.filter((name) => {
-        const key = name.toLowerCase();
+      const items = pool.filter((item) => {
+        const key = item.name.toLowerCase();
         if (seen.has(key) || inSession.has(key)) return false;
         if (query && !key.includes(query)) return false;
         seen.add(key);
         return true;
       });
       grid.replaceChildren(
-        ...items.slice(0, 20).map((name) => {
+        ...items.slice(0, 20).map((item) => {
           const btn = ui.el('button', { class: 'gym-pick-item', type: 'button', role: 'option' });
-          btn.innerHTML = `<span class="gym-pick-name">${ui.escapeHtml(name)}</span>`;
-          btn.addEventListener('click', () => add(name));
+          btn.innerHTML = `
+            <span class="gym-pick-name">${ui.escapeHtml(item.name)}</span>
+            ${item.tag ? `<span class="gym-pick-sub">${item.tag}</span>` : ''}`;
+          btn.addEventListener('click', () => add(item.name));
           return btn;
         })
       );
       if (!items.length && query) {
-        const empty = ui.el('div', { class: 'muted', style: { padding: '10px 2px', fontSize: 'var(--fs-sm)' } }, `Press Enter to add “${query}”`);
+        const empty = ui.el('div', { class: 'muted', style: { padding: '10px 2px', fontSize: 'var(--fs-sm)' } }, `No match — create it below or press Enter`);
         grid.append(empty);
       }
     };
+
+    // + Create New Exercise (V1.4.1): library-backed custom exercises.
+    const createBtn = ui.el('button', { class: 'btn btn-ghost btn-block gym-pick-create', type: 'button' }, `${ui.icon('plus', 16)} Create New Exercise`);
+    createBtn.addEventListener('click', () => openCreateExercise({ onCreate: (name) => { close(); add(name); } }));
+    wrap.append(createBtn);
 
     search.addEventListener('input', () => render(search.value));
     search.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && search.value.trim()) add(search.value.trim());
     });
     render();
+    return wrap;
+  });
+}
+
+/**
+ * CREATE EXERCISE sheet (V1.4.1 §11–§18): name required, optional muscle
+ * group, duplicate-safe, saved into the existing exerciseLibrary so it
+ * appears in every future picker. Sets/reps/weight belong to the session,
+ * never to creation.
+ */
+export function openCreateExercise({ onCreate }) {
+  ui.openSheet((close) => {
+    const wrap = ui.el('div', { class: 'flex-col' });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Create exercise'));
+
+    const nameInput = ui.el('input', {
+      class: 'input', type: 'text', placeholder: 'e.g. Cable Chest Fly', maxlength: '48',
+      'aria-label': 'Exercise name', autocomplete: 'off',
+    });
+    const muscleSelect = ui.el('select', { class: 'select', 'aria-label': 'Muscle group (optional)' },
+      ['Auto', ...MUSCLE_GROUPS].map((g) => `<option value="${g === 'Auto' ? '' : g}">${g}</option>`).join('')
+    );
+    const addBtn = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button' }, 'Add Exercise');
+    const hint = ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-xs)', minHeight: '16px' } });
+    wrap.append(nameInput, muscleSelect, addBtn, hint);
+
+    const submit = async () => {
+      const result = await gymT.createCustomExercise(nameInput.value, muscleSelect.value || null);
+      if (result.error) {
+        hint.textContent = result.existing ? `${result.error} Selecting it.` : result.error;
+        if (result.existing && onCreate) onCreate(result.existing.name); // duplicate → use it
+        return;
+      }
+      ui.toast(`${result.entry.name} saved to your exercises`, 'success');
+      close();
+      if (onCreate) onCreate(result.entry.name);
+    };
+    addBtn.addEventListener('click', submit);
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    setTimeout(() => nameInput.focus(), 80);
     return wrap;
   });
 }

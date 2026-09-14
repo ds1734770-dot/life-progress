@@ -94,6 +94,38 @@ export async function getLibrary() {
   });
 }
 
+/**
+ * Create a user-defined exercise (V1.4.1). Name is required, trimmed, and
+ * duplicate detection is case-insensitive on the normalized key — an existing
+ * "Chest Fly" blocks "chest fly" but keeps its original capitalization.
+ * Returns the library entry, or { error } when the name is empty/duplicate.
+ */
+export async function createCustomExercise(rawName, muscleGroup = null) {
+  const name = String(rawName || '').trim().replace(/\s+/g, ' ');
+  if (!name) return { error: 'Give the exercise a name.' };
+  const key = name.toLowerCase();
+  const existing = await getLibrary();
+  const dup = existing.find((e) => e.key === key);
+  if (dup) return { error: `“${dup.name}” is already in your exercises.`, existing: dup };
+  const entry = makeLibraryExercise({ name, muscleGroup: muscleGroup || guessMuscleGroup(name), usedAt: Date.now(), useCount: 1 });
+  await dbPut(STORES.exerciseLibrary, entry);
+  return { entry };
+}
+
+/** True when the normalized name is not yet in the given exercise names. */
+export function isUniqueExerciseName(name, takenNames) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return false;
+  return !takenNames.some((n) => String(n || '').trim().toLowerCase() === key);
+}
+
+/** Groups the library for the picker: user-created first, then recent. */
+export function groupLibraryEntries(entries) {
+  const custom = entries.filter((e) => e.useCount === 1);
+  const rest = entries.filter((e) => e.useCount !== 1);
+  return { custom, rest };
+}
+
 /** Registry every picker filters: the default list until the user adds their own. */
 export const SUGGESTED_EXERCISES = [
   'Bench Press', 'Incline Dumbbell Press', 'Shoulder Press', 'Lateral Raise',

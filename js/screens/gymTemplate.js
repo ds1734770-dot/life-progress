@@ -316,7 +316,7 @@ async function renderEditor(root, existing) {
   });
 }
 
-/** Exercise picker sheet — search + recent library + suggestions (§5/§6). */
+/** Exercise picker sheet — search + library/recent + create-your-own (§5/§6/§16). */
 async function openExercisePicker(state, onChange) {
   const library = await gymT.getLibrary();
   ui.openSheet((close) => {
@@ -333,6 +333,12 @@ async function openExercisePicker(state, onChange) {
     wrap.append(grid);
 
     async function add(name) {
+      // Duplicate guard: never push the same exercise twice into one workout.
+      if (state.exercises.some((e) => e.exerciseName.toLowerCase() === name.toLowerCase())) {
+        ui.toast(`${name} is already in this workout`, 'info');
+        close();
+        return;
+      }
       await gymT.touchLibrary([name]);
       state.exercises.push({
         exerciseName: name,
@@ -350,9 +356,11 @@ async function openExercisePicker(state, onChange) {
       const query = q.trim().toLowerCase();
       const inWorkout = new Set(state.exercises.map((e) => e.exerciseName.toLowerCase()));
       const libNames = library.map((e) => e.name);
+      const { custom, rest } = gymT.groupLibraryEntries(library);
       const suggestions = gymT.SUGGESTED_EXERCISES.filter((n) => !libNames.some((l) => l.toLowerCase() === n.toLowerCase()));
       const pool = [
-        ...library.map((e) => ({ name: e.name, sub: e.muscleGroup, tag: 'Recent' })),
+        ...custom.map((e) => ({ name: e.name, sub: e.muscleGroup, tag: 'My exercise' })),
+        ...rest.map((e) => ({ name: e.name, sub: e.muscleGroup, tag: 'Recent' })),
         ...suggestions.map((n) => ({ name: n, sub: gymT.guessMuscleGroup(n), tag: '' })),
       ];
       const seen = new Set();
@@ -376,11 +384,20 @@ async function openExercisePicker(state, onChange) {
       if (!items.length) {
         const empty = ui.el('div', { class: 'muted', style: { padding: '10px 2px', fontSize: 'var(--fs-sm)' } });
         empty.textContent = query
-          ? `No match for “${query}”. Type it in the search and press Enter to add it.`
+          ? `No match for “${query}” — create it below.`
           : 'All suggested exercises are already in this workout.';
         grid.append(empty);
       }
     }
+
+    // + Create New Exercise (V1.4.1): saves to the library, then adds here.
+    const createBtn = ui.el('button', { class: 'btn btn-ghost btn-block gym-pick-create', type: 'button' }, `${ui.icon('plus', 16)} Create New Exercise`);
+    createBtn.addEventListener('click', () => {
+      import('../screens/gymSession.js').then(({ openCreateExercise }) => {
+        openCreateExercise({ onCreate: (name) => { close(); add(name); } });
+      });
+    });
+    wrap.append(createBtn);
 
     search.addEventListener('input', () => render(search.value));
     search.addEventListener('keydown', (e) => {
