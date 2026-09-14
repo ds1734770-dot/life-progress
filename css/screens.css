@@ -2047,11 +2047,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Sticky primary action above the bottom dock */
+/* Primary action in normal flow (V1.4.1) — it can never cover exercise
+   cards or collide with the floating dock; the header keeps a compact
+   Finish button for quick access mid-workout. */
 .gym-sticky-actions {
-  position: sticky;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
-  z-index: 5;
+  position: static;
+  margin-top: var(--sp-5);
+  padding-bottom: var(--sp-2);
 }
 
 /* Detail/management action rows */
@@ -2167,10 +2169,9 @@
   gap: 8px;
 }
 .gym-set-row {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 44px;
-  align-items: center;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   border-radius: var(--r-m);
   background: var(--surface-2);
@@ -2340,8 +2341,6 @@
 /* Narrow screens: set rows compress gracefully */
 @media (max-width: 359px) {
   .gym-set-row {
-    grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 40px;
-    gap: 6px;
     padding: 6px;
   }
   .gym-step-btn {
@@ -2376,28 +2375,24 @@
   .gym-pick-item {
     transition: none;
   }
-
-
-/* ---------------------------------------------------------------------------
-   V1.4.1 — set rows: obvious editable inputs + guarded set removal
-   --------------------------------------------------------------------------- */
-/* Column header aligned with the set-row grid (hidden from AT — rows have
-   full aria-labels). */
-.gym-set-header {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr) 76px;
-  gap: 8px;
-  padding: 0 8px 2px;
-  font-size: var(--fs-2xs, 10px);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
 }
-/* Actions cell holds the complete-toggle and remove button side by side. */
+
+
+/* -------------------------------------------------------------------------
+   V1.4.1 — set rows: obvious editable inputs + guarded set removal.
+   Two-line rows: header (set no · complete · remove) over two full-width
+   steppers, so the number inputs stay comfortably typeable on any phone.
+   ------------------------------------------------------------------------- */
+.gym-set-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* Actions sit beside the set number on the header line. */
 .gym-set-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 6px;
 }
 /* Remove is a quiet affordance — visible, but not competing with ✓. */
@@ -2419,6 +2414,12 @@
 .gym-set-remove:disabled { opacity: 0.25; pointer-events: none; }
 .gym-set-row.done .gym-set-remove { opacity: 0.6; }
 
+/* Weight + reps side by side, each wide enough to type into. */
+.gym-set-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 6px;
+}
 /* The value between − / + must LOOK editable: strong field, big numbers. */
 .gym-stepper {
   background: var(--surface);
@@ -2433,6 +2434,7 @@
 .gym-step-input {
   font-size: var(--fs-lg);
   min-width: 0;
+  flex: 1;
   cursor: text;
 }
 .gym-step-input:focus {
@@ -2441,24 +2443,6 @@
 .gym-step-input::placeholder {
   color: var(--text-3);
   font-weight: 700;
-}
-.gym-step-btn {
-  width: 30px;
-  height: 36px;
-  font-size: 17px;
-}
-
-/* Narrow phones: stack each stepper's controls vertically so the input keeps
-   a usable width instead of collapsing. */
-@media (max-width: 379px) {
-  .gym-set-row {
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px;
-  }
-  .gym-set-header { grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px; }
-  .gym-set-actions { flex-direction: column; gap: 2px; }
-  .gym-set-remove { width: 28px; height: 24px; }
-  .gym-step-btn { width: 26px; }
-  .gym-step-unit { display: none; } /* kg/reps live in the column header */
 }
 
 /* Create-new-exercise entry point inside the picker sheet. */

@@ -342,7 +342,7 @@ Quality gate (all verified on the current commit):
   plus the V1.4.1 typed-input, set-deletion and custom-exercise suites)
 - `npm run smoke` — passing
 - `npm run qa`, `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
-- `npm run qa:gym` — 77/77 gym redesign + polish checks passing
+- `npm run qa:gym` — 92/92 gym redesign + polish checks passing
 - `npm run qa:camera` — pre-existing headless mediapipe flake on this machine
   (fails identically on the clean tree); all camera checks pass on hardware
 - `npm run screenshots` — 20 gym-state captures (V1.4 + V1.4.1 typed inputs,

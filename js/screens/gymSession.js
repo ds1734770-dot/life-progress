@@ -86,7 +86,6 @@ function render(root, state) {
       </div>
     </section>
 
-    <div style="height:120px"></div>
     <div class="gym-sticky-actions">
       <button class="btn btn-primary btn-block" data-action="finish" ${sessionCompletable(session) ? '' : 'disabled'}>
         ${ui.icon('check', 18)} Complete workout
@@ -147,9 +146,6 @@ function renderExercises(root, state) {
           </div>
           ${beatPill(bestToday, prevBest)}
         </div>
-        <div class="gym-set-header" aria-hidden="true">
-          <span>SET</span><span>KG</span><span>REPS</span><span></span>
-        </div>
         <div class="gym-set-list" role="list" aria-label="${ui.escapeHtml(ex.exerciseName)} sets"></div>
         <div class="flex-row" style="gap:8px;margin-top:10px">
           <button class="btn btn-ghost btn-sm" data-role="add-set">${ui.icon('plus', 14)} Add set</button>
@@ -195,33 +191,37 @@ function renderExercises(root, state) {
 }
 
 /**
- * One set row: − [ editable input ] unit +  for weight and reps, tap-to-
- * complete circle, and a guarded remove action (V1.4.1). The value between
- * the steppers is a REAL number input — tap, type, replace, delete — with
- * 0.5 kg weight precision preserved. Empty input shows a visible dash
- * placeholder; persistence happens on change/blur (controlled writes).
+ * One set row (V1.4.1): a header line (set number · complete · remove) above
+ * two FULL-WIDTH steppers — weight and reps each get a real, typeable number
+ * input (0.5 kg precision). Typing commits on change/blur into the active
+ * session and persists immediately; it never re-renders, so focus and the
+ * mobile keyboard survive. Steppers and typing write the same value.
  */
 function setRow(root, state, ex, index, set, prevBest) {
   const row = ui.el('div', { class: `gym-set-row${set.done ? ' done' : ''}`, role: 'listitem' });
   row.innerHTML = `
-    <span class="gym-set-label">Set ${index + 1}</span>
-    <div class="gym-stepper" data-kind="weight">
-      <button class="gym-step-btn" data-dir="-1" aria-label="Decrease weight">−</button>
-      <input class="gym-step-input" type="number" inputmode="decimal" step="0.5" min="0" value="${set.weight || ''}" placeholder="—" aria-label="Weight in kilograms for set ${index + 1}">
-      <span class="gym-step-unit">kg</span>
-      <button class="gym-step-btn" data-dir="1" aria-label="Increase weight">+</button>
+    <div class="gym-set-top">
+      <span class="gym-set-label">Set ${index + 1}</span>
+      <div class="gym-set-actions">
+        <button class="gym-set-toggle" aria-pressed="${set.done}" aria-label="${set.done ? `Set ${index + 1} completed — tap to unmark` : `Complete set ${index + 1}`}">
+          ${set.done ? ui.icon('check', 15) : ''}
+        </button>
+        <button class="gym-set-remove" aria-label="Remove set ${index + 1}" ${ex.sets.length <= 1 ? 'disabled' : ''} title="Remove set">${ui.icon('trash', 13)}</button>
+      </div>
     </div>
-    <div class="gym-stepper" data-kind="reps">
-      <button class="gym-step-btn" data-dir="-1" aria-label="Decrease reps">−</button>
-      <input class="gym-step-input" type="number" inputmode="numeric" step="1" min="0" value="${set.reps || ''}" placeholder="—" aria-label="Reps for set ${index + 1}">
-      <span class="gym-step-unit">reps</span>
-      <button class="gym-step-btn" data-dir="1" aria-label="Increase reps">+</button>
-    </div>
-    <div class="gym-set-actions">
-      <button class="gym-set-toggle" aria-pressed="${set.done}" aria-label="${set.done ? `Set ${index + 1} completed — tap to unmark` : `Complete set ${index + 1}`}">
-        ${set.done ? ui.icon('check', 15) : ''}
-      </button>
-      <button class="gym-set-remove" aria-label="Remove set ${index + 1}" ${ex.sets.length <= 1 ? 'disabled' : ''} title="Remove set">${ui.icon('trash', 13)}</button>
+    <div class="gym-set-fields">
+      <div class="gym-stepper" data-kind="weight">
+        <button class="gym-step-btn" data-dir="-1" aria-label="Decrease weight for set ${index + 1}">−</button>
+        <input class="gym-step-input" type="number" inputmode="decimal" step="0.5" min="0" value="${set.weight || ''}" placeholder="—" aria-label="Weight in kilograms for set ${index + 1}">
+        <span class="gym-step-unit">kg</span>
+        <button class="gym-step-btn" data-dir="1" aria-label="Increase weight for set ${index + 1}">+</button>
+      </div>
+      <div class="gym-stepper" data-kind="reps">
+        <button class="gym-step-btn" data-dir="-1" aria-label="Decrease reps for set ${index + 1}">−</button>
+        <input class="gym-step-input" type="number" inputmode="numeric" step="1" min="0" value="${set.reps || ''}" placeholder="—" aria-label="Reps for set ${index + 1}">
+        <span class="gym-step-unit">reps</span>
+        <button class="gym-step-btn" data-dir="1" aria-label="Increase reps for set ${index + 1}">+</button>
+      </div>
     </div>
   `;
 
@@ -246,9 +246,14 @@ function setRow(root, state, ex, index, set, prevBest) {
 
     function commitInput() {
       // Empty/invalid → 0 (inline-safe: no crash while the user clears the
-      // field mid-edit; change/blur only fire when editing ends).
+      // field mid-edit; change/blur only fire when editing ends). Skipping an
+      // unchanged commit avoids double persist writes when change AND blur
+      // both fire for the same edit.
       const val = Number(input.value) || 0;
-      const patch = kind === 'weight' ? { weight: val } : { reps: val };
+      const key = kind === 'weight' ? 'weight' : 'reps';
+      if (Number(input.dataset.lastCommit) === val && input.dataset.lastCommit !== undefined) return;
+      input.dataset.lastCommit = String(val);
+      const patch = key === 'weight' ? { weight: val } : { reps: val };
       state.session = gymT.updateSet(state.session, ex.id, index, patch);
       gymT.persistActiveWorkout(state.session); // reload-safe (fire-and-forget)
     }

@@ -125,6 +125,29 @@ async function click(selector) {
   await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click()`);
 }
 
+// Real input device events (§23): typing and tapping as a user does, not
+// synthetic .value= assignments.
+const KEYCODES = { '0': 48, '1': 49, '2': 50, '3': 51, '4': 52, '5': 53, '6': 54, '7': 55, '8': 56, '9': 57, '.': 190 };
+async function typeText(text) {
+  for (const ch of String(text)) {
+    const vk = KEYCODES[ch] || 0;
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, key: ch, windowsVirtualKeyCode: vk });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, windowsVirtualKeyCode: vk });
+  }
+}
+async function pressTab() {
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', windowsVirtualKeyCode: 9 });
+}
+/** Real mouse tap at the center of an element matched by a page expression. */
+async function tapElement(pageExpr) {
+  const box = await evaluate(`(() => { const el = (${pageExpr}); if (!el) return null; const r = el.getBoundingClientRect(); return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 }); })()`);
+  if (!box) throw new Error('tapElement: element not found');
+  const { x, y } = JSON.parse(box);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+}
+
 /** One-line state dump. */
 async function dumpState(label) {
   const s = await evaluate(`
@@ -184,6 +207,10 @@ try {
   await connect(target.webSocketDebuggerUrl);
   await send('Runtime.enable');
   await send('Page.enable');
+  // Make the page treat itself as focused so synthetic mouse events transfer
+  // focus like real user input (headless windows are otherwise unfocused and
+  // mousedown-focus silently no-ops).
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 900, deviceScaleFactor: 2, mobile: true });
 
   // ---- Onboarding fast-forward (smoke-test pattern: wait for mounts) -------
@@ -466,6 +493,151 @@ try {
   `));
   await evaluate(`(() => { document.querySelector('.sheet [data-sheet-close]')?.click(); true })()`);
   await sleep(400);
+
+  // ---- 5e. Real input interaction + layout contract (§1–§13, §23) ----------
+  // The kg/reps controls are REAL inputs: tap → type via actual key events →
+  // value reaches the DOM and the session state, focus never lost mid-edit.
+  const benchCard = `[...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))`;
+  /** Page expression selecting a node inside bench's first set row. */
+  const benchField = (sel) => `(${benchCard}).querySelector('.gym-set-row').querySelector('${sel}')`;
+  // Layout contract first (§2, §14–§18): at scroll-top the footer must be
+  // below the fold (in flow, not floating over content); after scrolling to
+  // the bottom it must not intersect the fixed dock (viewport-space rects).
+  check('no SETKGREPS/debug text anywhere in the UI', await evaluate(
+    `!document.body.innerText.replace(/\\s+/g, '').toUpperCase().includes('SETKGREPS')`
+  ));
+  check('exactly one Complete workout button (plus header Finish)', await evaluate(
+    `[...document.querySelectorAll('[data-action="finish"]')].filter((b) => b.textContent.includes('Complete workout')).length === 1`
+  ));
+  const layout = JSON.parse(await evaluate(`
+    (() => {
+      const f = document.querySelector('.gym-sticky-actions').getBoundingClientRect();
+      const doc = document.documentElement;
+      return JSON.stringify({ fTop: f.top, fHeight: f.height, docH: doc.scrollHeight });
+    })()
+  `));
+  check('Complete workout sits in normal flow at the page bottom (not floating over content)',
+    layout.fTop > layout.docH - 300 && layout.fHeight < 130, JSON.stringify(layout));
+  await evaluate(`window.scrollTo(0, document.documentElement.scrollHeight)`);
+  await sleep(400);
+  const overlap = JSON.parse(await evaluate(`
+    (() => {
+      const f = document.querySelector('.gym-sticky-actions').getBoundingClientRect();
+      const dock = document.querySelector('#tabbar')?.getBoundingClientRect();
+      if (!dock) return JSON.stringify({ ok: true });
+      return JSON.stringify({ fBottom: f.bottom, dockTop: dock.top });
+    })()
+  `));
+  check('scrolled to bottom: Complete workout does not collide with the bottom dock',
+    overlap.ok === true || overlap.fBottom <= overlap.dockTop + 4, JSON.stringify(overlap));
+
+  // Real tap on the weight input, then real keystrokes: 62.5 (§4, §6).
+  // The layout checks scrolled the page — bring the bench card back on screen
+  // first, or the synthesized tap would land on off-screen coordinates.
+  await evaluate(`(${benchCard}).scrollIntoView({ block: 'center' })`);
+  await sleep(300);
+  // Bench set 1 may already be marked done from the completion section —
+  // unmark it so the §12 check below is strict.
+  if (await evaluate(`${benchField('.gym-set-toggle')}.getAttribute('aria-pressed') === 'true'`)) {
+    await evaluate(`(() => { ${benchField('.gym-set-toggle')}.click(); })()`);
+    await sleep(300);
+  }
+  await tapElement(benchField('.gym-stepper[data-kind="weight"] .gym-step-input'));
+  await sleep(200);
+  // Verify the field is focusable and becomes the active element. A real
+  // mouse tap transfers focus on devices; headless Chrome may skip
+  // mousedown-focus entirely (window never has focus), so accept either the
+  // tap itself or an explicit .focus() landing on the same input — the point
+  // is that the input is real, enabled, and not covered by anything.
+  let focused = await evaluate(
+    `document.activeElement === ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}`
+  );
+  if (!focused) {
+    const hit = await evaluate(`(() => {
+      const i = ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')};
+      const r = i.getBoundingClientRect();
+      const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      i.focus();
+      return JSON.stringify({ coveredBy: at === i || i.contains(at) ? null : (at?.className || at?.tagName || null), becameActive: document.activeElement === i, disabled: i.disabled, readOnly: i.readOnly });
+    })()`);
+    const H = JSON.parse(hit);
+    console.log(`WARN  headless tap-focus skipped (env artifact) — hit-test ok=${H.coveredBy === null}, focusable=${H.becameActive}, disabled=${H.disabled}, readOnly=${H.readOnly}`);
+    focused = H.coveredBy === null && H.becameActive && !H.disabled && !H.readOnly;
+  }
+  check('weight field is typeable: nothing covers it, focus lands on it', focused);
+  await evaluate(`(() => { const i = ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}; i.value = ''; i.focus(); })()`);
+  await typeText('62.5');
+  await sleep(150);
+  check('typed 62.5 lands in the input (focus preserved, no re-render)', await evaluate(
+    `(() => { const i = ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}; return i.value === '62.5' && document.activeElement === i; })()`
+  ));
+  // Move to reps the way a user does: tap it, type 10, Tab to commit.
+  await tapElement(benchField('.gym-stepper[data-kind="reps"] .gym-step-input'));
+  await sleep(150);
+  await evaluate(`(() => { const i = ${benchField('.gym-stepper[data-kind="reps"] .gym-step-input')}; i.value = ''; i.focus(); })()`);
+  await typeText('10');
+  await pressTab();
+  await sleep(400);
+  check('typed reps 10 commits (Tab → change → session)', await evaluate(
+    `(() => { const i = ${benchField('.gym-stepper[data-kind="reps"] .gym-step-input')}; return i.value === '10'; })()`
+  ));
+  check('weight 62.5 reached the active session', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const s = await gt.getActiveWorkout();
+      return s.exercises.find((e) => e.exerciseName === 'Bench Press')?.sets[0].weight === 62.5;
+    })()
+  `));
+  check('reps 10 reached the active session', await evaluate(`
+    (async () => {
+      const gt = await import('/js/gymTemplates.js');
+      const s = await gt.getActiveWorkout();
+      const set = s.exercises.find((e) => e.exerciseName === 'Bench Press')?.sets[0];
+      return set?.reps === 10 && set?.weight === 62.5;
+    })()
+  `));
+  check('typing did not complete the set (§12)', await evaluate(
+    `${benchField('.gym-set-toggle')}.getAttribute('aria-pressed') === 'false'`
+  ));
+  // Steppers and typing drive the SAME value (§9): + → 63, − → 62.5.
+  await evaluate(`(() => { ${benchField('.gym-stepper[data-kind="weight"] .gym-step-btn[data-dir="1"]')}.click(); })()`);
+  await sleep(250);
+  check('stepper + after typed 62.5 gives 65 (same value channel, 2.5 kg gym step)', await evaluate(
+    `${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}.value === '65'`
+  ));
+  await evaluate(`(() => { ${benchField('.gym-stepper[data-kind="weight"] .gym-step-btn[data-dir="-1"]')}.click(); })()`);
+  await sleep(250);
+  check('stepper − returns to 62.5', await evaluate(
+    `${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}.value === '62.5'`
+  ));
+  // §13: delete the MIDDLE set — remaining values + numbering survive.
+  const rowsSnapshot = () => evaluate(`
+    JSON.stringify([...(${benchCard}).querySelectorAll('.gym-set-row')].map((r) => ({
+      label: r.querySelector('.gym-set-label').textContent,
+      w: r.querySelector('[aria-label^="Weight"]').value,
+      reps: r.querySelector('[aria-label^="Reps"]').value,
+    })))
+  `);
+  const before = JSON.parse(await rowsSnapshot());
+  await evaluate(`(() => { (${benchCard}).querySelectorAll('.gym-set-remove')[1].click(); })()`);
+  await waitFor(`!!document.querySelector('.dialog')`, 5000, 'middle-set remove dialog');
+  await evaluate(`(() => { [...document.querySelectorAll('.dialog button')].find((b) => b.textContent.includes('Remove set'))?.click(); })()`);
+  await sleep(600);
+  const after = JSON.parse(await rowsSnapshot());
+  check('middle set removed (one row fewer)', after.length === before.length - 1, JSON.stringify(before) + ' → ' + JSON.stringify(after));
+  check('remaining sets keep their values and renumber',
+    after[0].w === before[0].w && after[1].label === 'Set 2' &&
+    after[1].w === before[2].w && after[1].reps === before[2].reps,
+    JSON.stringify(after));
+  // Restore bench set 1 to 65 by TYPING again (double-checks re-editing),
+  // so the reload/resume expectation below stays meaningful.
+  await evaluate(`(() => { const i = ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}; i.value = ''; i.focus(); })()`);
+  await typeText('65');
+  await pressTab();
+  await sleep(400);
+  check('re-edit by typing: 62.5 → 65', await evaluate(
+    `(() => { const i = ${benchField('.gym-stepper[data-kind="weight"] .gym-step-input')}; return i.value === '65'; })()`
+  ));
 
   // ---- 6. Reload resume (§20) ----------------------------------------------
   await dumpState('before reload');

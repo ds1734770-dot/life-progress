@@ -287,6 +287,12 @@ try {
   await click('[data-action="start"]');
   await waitFor(`document.querySelectorAll('.gym-exercise').length >= 3`, 8000);
   await shot('gym141-editable-sets');
+  // §32 #2/#3: focused weight field (obviously editable) + #8 footer position
+  // at top-of-workout (Complete workout in flow, never covering the cards).
+  await evaluate(`(() => { const i = document.querySelector('[aria-label^="Weight"]'); i.focus(); true })()`);
+  await sleep(250);
+  await shot('gym141-input-focused');
+  await shot('gym141-top-of-workout');
   // Decimal weight typed in + a completed set.
   await evaluate(`(() => {
     const row = [...document.querySelectorAll('.gym-exercise')].find((n) => n.textContent.includes('Bench Press'))?.querySelector('.gym-set-row');
