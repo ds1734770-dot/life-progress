@@ -362,6 +362,139 @@ The app itself remains a **fully static site** (relative paths, deploys at a
 domain root or subpath — GitHub Pages, Netlify, Cloudflare Pages, Vercel,
 Firebase Hosting or any static server).
 
+---
+
+## Cloudflare Workers backend (V1.6.4)
+
+As an alternative to running the Node backend on your own always-on host,
+the notification backend ships as a **Cloudflare Workers Free** deployment:
+`cloudflare/worker.js` (stateless API + cron) + one SQLite-backed **Durable
+Object** (`cloudflare/do.js`) + a single every-minute **Cron Trigger**. Both
+backends share the same validation, CORS policy, crypto and scheduling logic
+(`server/push/http.js`, `server/push/domain.js`, `server/push/webpush.js`), so
+the client cannot tell them apart.
+
+**Cloudflare deployments do NOT use the Node filesystem persistence**
+(`.push-data.json` / `.vapid-keys.json` are Node-host artifacts only). State
+lives in the Durable Object's SQLite database; VAPID keys come from
+Cloudflare secrets.
+
+### One-time setup
+
+```bash
+npm install                 # installs wrangler (dev dependency)
+npx wrangler login          # authenticate the Cloudflare account (Free)
+```
+
+### Deploy
+
+```bash
+npm run deploy:push         # = npx wrangler deploy
+```
+
+This creates/updates the Worker `life-progress-push`, applies the
+`new_sqlite_classes` Durable Object migration, and registers the
+`* * * * *` Cron Trigger. The worker URL
+`https://life-progress-push.<your-subdomain>.workers.dev` appears in the
+command output.
+
+### Configure VAPID secrets (never commit these)
+
+```bash
+npx wrangler secret put VAPID_PUBLIC_KEY
+npx wrangler secret put VAPID_PRIVATE_KEY
+npx wrangler secret put VAPID_SUBJECT        # e.g. mailto:you@example.com
+```
+
+Generate a keypair once with the project's own generator and paste the two
+values when prompted:
+
+```bash
+node -e "import('./server/push/webpush.js').then(async m => console.log(await m.generateVapidKeys()))"
+```
+
+The identity must remain STABLE: changing `VAPID_PRIVATE_KEY` invalidates
+every existing browser subscription.
+
+### Allowed origin
+
+`wrangler.jsonc` sets `PUSH_ALLOWED_ORIGINS =
+"https://ds1734770-dot.github.io"` by default. Adjust there (or override
+with a matching secret) if the frontend origin changes. It is an exact-match
+allowlist — never `*`.
+
+### Point the frontend at the Worker
+
+Edit `push-config.js`:
+
+```js
+window.LIFE_PROGRESS_PUSH_API = "https://life-progress-push.<your-subdomain>.workers.dev";
+```
+
+Commit and let GitHub Pages redeploy. `Settings → Notifications →
+Diagnostics` will show the Worker origin and (once subscribed + registered)
+`Background reminders active`.
+
+### Verify the deployment
+
+```bash
+curl https://life-progress-push.<your-subdomain>.workers.dev/health
+curl https://life-progress-push.<your-subdomain>.workers.dev/api/push/vapid-public
+curl https://life-progress-push.<your-subdomain>.workers.dev/api/push/status
+```
+
+All three must return JSON (never HTML).
+
+### Local development
+
+```bash
+npm run dev:push            # = npx wrangler dev (local Worker + local DO)
+```
+
+For local secret-free runs, create `.dev.vars` (git-ignored) with the VAPID
+values, or rely on `/api/push/vapid-public` returning 503 without them.
+
+### Testing
+
+```bash
+npm run test:push           # all notification backend suites
+npm run qa:push             # Cloudflare DO suite (real SQLite, mocked sender,
+                            # deterministic clocks — no network, no Wrangler)
+```
+
+### Troubleshooting
+
+- **Diagnostics say "static hosting" / 404:** the frontend is calling the
+  GitHub Pages origin — `push-config.js` is not set to the Worker URL.
+- **vapid-public returns 503:** secrets not set — repeat the
+  `wrangler secret put` steps.
+- **Notifications stop after redeploying the Worker:** VAPID keys changed —
+  restore the original key values (devices re-subscribe otherwise).
+- **CORS errors in the console:** add the exact frontend origin to
+  `PUSH_ALLOWED_ORIGINS`.
+
+### Rollback
+
+Redeploy a previous commit (`git revert` + `npm run deploy:push`), or in the
+Cloudflare dashboard use **Workers → life-progress-push → Deployments →
+Rollback**. Durable Object data survives rollbacks; the `v1` migration must
+never be removed from `wrangler.jsonc`.
+
+### Real-device acceptance (after deploying)
+
+The automated suites prove the backend logic; they do NOT prove device
+delivery. After the Worker is live, run the acceptance test from
+**§ Testing → Notifications QA** below: install/add-to-Home-Screen, enable
+reminders, subscription + registration shown in Diagnostics, real test push,
+then the closed-app / locked-phone scheduled reminder, tap-through, and
+no-duplicate-on-reopen checks on iPhone (Home Screen PWA) and Chrome.
+
+---
+
+### Node backend (self-hosted alternative)
+
+The original Node backend remains intact and supported:
+
 Background reminders additionally need the notification backend on an
 always-on host. **This is mandatory when the app itself is on a static host
 (GitHub Pages, Netlify, Cloudflare Pages, …): static hosts cannot answer

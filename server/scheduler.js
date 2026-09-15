@@ -31,89 +31,21 @@
  */
 import { claimOccurrence, listSubscriptions, markSubscriptionOutcome, hasOccurrence, updateOccurrence } from './store.js';
 import { sendPushMessage } from './push/webpush.js';
-import { nextDailyOccurrence, timeToMinutes, inQuietHours } from '../js/timeCore.js';
+import { nextDailyOccurrence } from '../js/timeCore.js';
+import {
+  GRACE_MS,
+  computeNextOccurrences,
+  decideOccurrence,
+  buildPushPayload,
+} from './push/domain.js';
+
+// Pure scheduling domain moved to server/push/domain.js (V1.6.4) so the
+// Cloudflare Worker backend can reuse the exact same delivery policy.
+export { computeNextOccurrences, decideOccurrence, buildPushPayload, GRACE_MS };
 
 const TICK_MS = 15 * 1000; // scheduler heartbeat
-const GRACE_MS = 90 * 1000; // deliver up to 90s late (tick jitter, clock drift)
 const MAX_RETRY_DELAY_MS = 10 * 60 * 1000;
 const CONTENT_CATEGORIES = ['water', 'gym', 'goals', 'journal'];
-
-/** Route hint per category — same hash routes the in-app router uses. */
-const ROUTES = {
-  water: '#/water',
-  gym: '#/gym',
-  goals: '#/goals',
-  journal: '#/journal',
-  streaks: '#/dashboard',
-  achievements: '#/achievements',
-  test: '#/dashboard',
-};
-
-/**
- * Compute the next pending occurrence for every timed, enabled category of a
- * subscription. Pure: derives everything from the persisted record.
- */
-export function computeNextOccurrences(sub, nowMs = Date.now()) {
-  const out = [];
-  if (!sub || sub.enabled === false || sub.disabled) return out;
-  const tz = sub.timezone;
-  if (!tz) return out;
-  for (const category of CONTENT_CATEGORIES) {
-    if (sub.categories?.[category] === false) continue;
-    const time = sub.times?.[category];
-    if (timeToMinutes(time) === null) continue;
-    // Resume from the ledger position if we have one, so a restart never
-    // re-delivers the occurrence that was already handled.
-    const lastHandled = sub.ledger?.[category] || null;
-    let next = nextDailyOccurrence(tz, time, lastHandled ? Math.max(nowMs, lastHandled) : nowMs);
-    if (!next) continue;
-    // nextDailyOccurrence(after) is strictly after `after`; when resuming from
-    // the ledger that is exactly the following day's occurrence.
-    out.push({
-      category,
-      time,
-      epochMs: next.epochMs,
-      dateKey: next.dateKey,
-      occurrenceId: `${sub.deviceKey}:${category}:${next.dateKey}`,
-    });
-  }
-  return out;
-}
-
-/**
- * Decide what to do with an occurrence. Returns one of:
- *  { action: 'deliver' } | { action: 'skip', reason } | { action: 'reschedule' }
- * Exported for unit tests — this is the complete delivery policy (§11/§12).
- */
-export function decideOccurrence(sub, occ, nowMs = Date.now()) {
-  // Not due yet — wait for the next tick. Never deliver early.
-  if (occ.epochMs > nowMs) {
-    return { action: 'reschedule' };
-  }
-  // Quiet hours are evaluated in the DEVICE's timezone for the occurrence's
-  // wall-clock minute (not "now" — the scheduled time is what matters).
-  const occMinutes = timeToMinutes(occ.time);
-  if (inQuietHours(occMinutes, sub.quietStart ?? '22:30', sub.quietEnd ?? '07:00')) {
-    return { action: 'skip', reason: 'quiet-hours' };
-  }
-  // Missed window: the instant passed too long ago (server was down, etc.).
-  if (nowMs - occ.epochMs > GRACE_MS) {
-    return { action: 'skip', reason: 'missed' };
-  }
-  return { action: 'deliver' };
-}
-
-/** Build the minimal push payload (§14). Nothing personal ever goes here. */
-export function buildPushPayload({ kind = 'reminder', category, occurrenceId, dateKey, route, serverTime = Date.now() }) {
-  return JSON.stringify({
-    type: kind,
-    category: String(category),
-    occurrenceId: String(occurrenceId),
-    dateKey: String(dateKey || ''),
-    route: String(route || ROUTES[category] || '#/dashboard'),
-    serverTime,
-  });
-}
 
 async function deliverOccurrence(sub, occ, vapid) {
   const payload = buildPushPayload({

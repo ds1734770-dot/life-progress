@@ -1,0 +1,42 @@
+// Cloudflare Workers configuration — Life Progress push backend (V1.6.4).
+//
+// Deployed separately from the GitHub Pages frontend (which stays untouched,
+// §32). VAPID secrets are NEVER written here: set them with
+//   npx wrangler secret put VAPID_PUBLIC_KEY   (and VAPID_PRIVATE_KEY / VAPID_SUBJECT)
+// Secrets are injected as runtime env vars under the same names the Node
+// backend uses (§6), so no code changes are needed between backends.
+//
+// FREE TIER ONLY (§2/§25): one Worker, one SQLite Durable Object class, one
+// every-minute Cron Trigger. No KV, no R2, no Queues, no paid services.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "life-progress-push",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-08-01",
+
+  // Non-secret configuration (override at deploy time if needed).
+  // Secrets (VAPID_*) are set via `wrangler secret put` — never here.
+  "vars": {
+    "PUSH_ALLOWED_ORIGINS": "https://ds1734770-dot.github.io"
+  },
+
+  // The authoritative notification store: SQLite-backed Durable Object (§4).
+  "durable_objects": {
+    "bindings": [
+      { "name": "LP_PUSH", "class_name": "LPPushDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LPPushDO"] }
+  ],
+
+  // Every-minute scheduler (§10/§22). Cron runs on UTC; each device's
+  // wall-clock time is computed in ITS stored IANA timezone inside the DO.
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  "observability": {
+    "enabled": false
+  }
+}

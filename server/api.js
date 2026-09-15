@@ -16,9 +16,14 @@ import {
 } from './store.js';
 import { sendPushMessage } from './push/webpush.js';
 import { buildPushPayload } from './scheduler.js';
-import { isValidTimezone, isValidTime } from '../js/timeCore.js';
+import {
+  corsHeaders,
+  validateRegistration,
+} from './push/http.js';
 
-const CATEGORIES = ['water', 'gym', 'goals', 'journal'];
+// Registration validation + CORS policy live in server/push/http.js (V1.6.4)
+// so the Cloudflare Worker backend enforces the identical contract.
+export { validateRegistration };
 
 // ---------------------------------------------------------------------------
 // Rate limiting (in-memory, per IP — generous; abuse unlikely for a personal app)
@@ -54,56 +59,6 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
-/**
- * Validate and normalize a registration body. Returns { ok, value|error }.
- * Only known fields survive; unknown fields are dropped (never persisted).
- */
-export function validateRegistration(body) {
-  if (!body || typeof body !== 'object') return { error: 'invalid body' };
-  const { deviceKey, endpoint, keys, timezone, categories, times, quietStart, quietEnd, enabled } = body;
-
-  if (typeof deviceKey !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(deviceKey)) {
-    return { error: 'invalid deviceKey' };
-  }
-  if (typeof endpoint !== 'string' || !/^https:\/\/[^\s]+$/.test(endpoint) || endpoint.length > 2048) {
-    return { error: 'invalid endpoint' };
-  }
-  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' ||
-      keys.p256dh.length > 512 || keys.auth.length > 256) {
-    return { error: 'invalid keys' };
-  }
-  const tz = isValidTimezone(timezone);
-  if (!tz) return { error: 'invalid timezone' };
-
-  const cats = {};
-  for (const c of CATEGORIES) cats[c] = categories?.[c] !== false;
-
-  const tms = {};
-  for (const c of CATEGORIES) {
-    const t = times?.[c];
-    if (t != null && isValidTime(t)) tms[c] = t;
-  }
-  // Require at least a sane set — missing entries keep previous server values.
-  if (Object.keys(tms).length === 0) return { error: 'missing reminder times' };
-
-  const qs = isValidTime(quietStart) ? quietStart : '22:30';
-  const qe = isValidTime(quietEnd) ? quietEnd : '07:00';
-
-  return {
-    value: {
-      deviceKey,
-      endpoint,
-      keys: { p256dh: keys.p256dh, auth: keys.auth },
-      timezone: tz,
-      categories: cats,
-      times: tms,
-      quietStart: qs,
-      quietEnd: qe,
-      enabled: enabled !== false,
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Route handler — mounted from server.js
 // ---------------------------------------------------------------------------
@@ -117,16 +72,8 @@ export function validateRegistration(body) {
  * credentials/cookies are involved anywhere in this API).
  */
 function applyCors(req, res) {
-  const origin = req.headers?.origin;
-  if (!origin) return;
-  const allowList = (process.env.PUSH_ALLOWED_ORIGINS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
-  if (allowList.length && !allowList.includes(origin)) return; // stays blocked
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Max-Age', '600');
+  const headers = corsHeaders(req.headers?.origin, process.env.PUSH_ALLOWED_ORIGINS);
+  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
 }
 
 /**

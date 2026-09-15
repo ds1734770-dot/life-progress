@@ -13,6 +13,11 @@ screenshots/
 .push-data.json
 .push-data.json.tmp
 
+# V1.6.4 Cloudflare Workers backend (secrets + local dev artifacts)
+.wrangler/
+.dev.vars
+.wrangler-state/
+
 
 # OS junk
 .DS_Store

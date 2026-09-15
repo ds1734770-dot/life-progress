@@ -1,27 +1,45 @@
 /**
  * Web Push sender — RFC 8291 (aes128gcm message encryption) + RFC 8292
- * (VAPID) implemented directly on Node's WebCrypto, keeping the project's
+ * (VAPID) implemented directly on standard WebCrypto, keeping the project's
  * zero-dependency convention.
+ *
+ * ISOMORPHIC (V1.6.4): runs unmodified on Node (18+, where globalThis.crypto
+ * and atob/btoa are built in) AND on Cloudflare Workers — no node: imports,
+ * no Buffer. The Node backend and the Cloudflare Worker therefore share ONE
+ * push-crypto implementation, so a fix or audit applies to both.
  *
  * This module performs ONLY byte-level push cryptography. It trusts nothing:
  * the subscription record is validated by api.js before it reaches here, and
  * the notification payload is built by scheduler.js from server-owned data.
  */
-import { webcrypto as crypto } from 'node:crypto';
+const crypto = globalThis.crypto;
 
 const encoder = new TextEncoder();
 const P256_PUB_LEN = 65; // 0x04 || X(32) || Y(32)
 
 // ---------------------------------------------------------------------------
-// Base64url helpers
+// Base64url helpers — plain WebCrypto-era primitives (no Buffer)
 // ---------------------------------------------------------------------------
 
+function toByteView(buf) {
+  if (buf instanceof Uint8Array) return buf;
+  return new Uint8Array(buf, (buf.byteOffset || 0), buf.byteLength);
+}
+
 export function b64uEncode(buf) {
-  return Buffer.from(buf).toString('base64url');
+  const bytes = toByteView(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export function b64uDecode(s) {
-  return new Uint8Array(Buffer.from(String(s || ''), 'base64'));
+  let str = String(s || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  const raw = atob(str);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +87,7 @@ export async function vapidAuthorization({ audience, subject, publicKeyB64u, pri
 }
 
 function b64uJson(obj) {
-  return Buffer.from(JSON.stringify(obj)).toString('base64url');
+  return b64uEncode(encoder.encode(JSON.stringify(obj)));
 }
 
 // ---------------------------------------------------------------------------
@@ -217,12 +235,13 @@ export async function sendPushMessage({ endpoint, keys }, payload, vapid) {
       method: 'POST',
       headers: {
         Authorization: authorization,
-        'Content-Length': String(body.length),
+        // NOTE: no Content-Length — fetch sets it from the body, and the
+        // Cloudflare Workers runtime forbids setting it manually.
         TTL: String(vapid.ttlSeconds ?? 4 * 3600),
         'Content-Type': 'application/octet-stream',
         'Content-Encoding': 'aes128gcm',
         // Prefer responses without payload; we never need one.
-        Prefer: 'respond-async',
+        'Prefer': 'respond-async',
       },
       body,
     });
