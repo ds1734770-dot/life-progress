@@ -501,6 +501,11 @@ async function importData() {
       thumb: await photos.dataURLToBlob(record.thumb),
     }));
     await loadSettings();
+    // V1.6 — reconstruct background delivery from the imported prefs (§26):
+    // enable → subscribe/register; disable → deregister. Best-effort offline.
+    const { syncPushRegistration } = await import('../pushClient.js');
+    const notif = await import('../notifications.js');
+    syncPushRegistration(await notif.getNotificationPrefs()).catch(() => {});
     ui.toast('Backup restored', 'success');
     ui.haptic(30);
     go('dashboard');
@@ -518,6 +523,10 @@ async function clearData() {
   });
   if (!ok) return;
   try {
+    // V1.6 — remove background push registration FIRST (server deregister +
+    // browser unsubscribe) so no orphaned reminder schedule survives the wipe.
+    const { wipePushRegistration } = await import('../pushClient.js');
+    await wipePushRegistration().catch(() => {});
     await dbResetAll();
     resetSettings();
     photos.revokePhotoUrls();

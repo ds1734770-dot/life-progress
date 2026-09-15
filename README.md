@@ -13,8 +13,8 @@ and a motivational dashboard into one cohesive experience.
 ## Quick start
 
 ```bash
-npm start          # serve the app at http://localhost:8080
-npm test           # run the Node unit tests
+npm start          # serve the app + notification backend at http://localhost:8080
+npm test           # run the Node unit tests (344)
 npm run smoke      # run the full end-to-end browser test (headless Chrome)
 npm run qa         # extended QA: restart persistence, export/import, offline, mobile
 npm run icons      # regenerate the PWA icons
@@ -39,13 +39,172 @@ launches full-screen like a native app and works fully offline.
 | Icons (PWA) | **Generated PNGs** (`node scripts/make-icons.js`) | Real 192/512 icons written with Node's built-in zlib — no asset toolchain. |
 | Charts | **Pure CSS/SVG** | 7-day water bars and weekly volume need nothing heavier. |
 | Offline | **Service worker** (cache-first app shell) | Core functionality works with no network. |
-| Sync | **None (by design)** | The storage layer is a single module (`js/db.js`); swapping in a cloud adapter later means replacing just that file. |
+| Reminders | **Web Push + server scheduler (V1.6)** | True background delivery with the app closed; see *Notifications (V1.6)* below. |
+| Sync | **None (by design)** | Personal data stays local; the push server stores delivery metadata only. |
 
-The repository was empty when this project started, so the stack was chosen
-for this environment: no Android SDK / Flutter toolchain is available, and the
-requirements demand free-first + offline-first + installable. A PWA is the
-most practical solution that satisfies all of them while remaining verifiable
-end-to-end here.
+---
+
+## Notifications (V1.6) — real background reminders
+
+### Why local timers cannot do this
+
+Browsers throttle or suspend JavaScript in background/closed tabs. A
+`setTimeout`/`setInterval` inside the page dies with the tab, so any reminder
+built on page timers can only appear when the user reopens the app. The Web
+Push model exists precisely for this: a **server** sends a signed,
+encrypted message to the **browser's push service** (FCM on Android/Chrome,
+Apple's service on iOS 16.4+, Mozilla's on Firefox), which **wakes the
+service worker** even with the app fully closed. The SW then calls
+`showNotification` — the OS displays it. No page JavaScript is involved.
+
+### How it works in Life Progress
+
+```
+User enables reminders (Settings → Notifications)
+  → permission requested (explicit tap only)
+  → PushManager.subscribe with the server's VAPID public key
+  → subscription + schedule (times, timezone, quiet hours) → POST /api/push/register
+  → server stores the record and computes the NEXT occurrence per category
+
+At the scheduled wall-clock time in the DEVICE's timezone
+  → server encrypts a minimal payload (RFC 8291) + signs VAPID (RFC 8292)
+  → POST to the browser push service
+  → service worker wakes (even if the app is closed)
+  → SW validates the payload, re-checks prefs/quiet-hours/dedup LOCALLY,
+    derives the context-aware copy from local data (same eligibility engine
+    as the in-app sweep), then showNotification()
+  → OS notification; tap deep-links to #/water #/gym #/goals #/journal …
+```
+
+**Privacy by construction:** the push payload contains only
+`{ type, category, occurrenceId, dateKey, route, serverTime }` — never
+journal text, amounts, names or photos. The context-aware wording ("1500 ml
+left", "You have 2 goals left") is derived **on the device** from the local
+IndexedDB. The server stores only: endpoint, crypto keys, timezone, reminder
+times, quiet hours, category toggles and delivery bookkeeping.
+
+### Environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `PORT` | no | Listen port (default 8080). |
+| `VAPID_PUBLIC_KEY` | prod: yes | Base64url P-256 public key (safe to expose). |
+| `VAPID_PRIVATE_KEY` | prod: yes | Base64url PKCS#8 private key — **server only, never commit**. |
+| `VAPID_SUBJECT` | prod: yes | `mailto:you@example.com` (or `https://…`) contact for VAPID JWTs. |
+| `PUSH_VAPID_FILE` | no | Where auto-generated dev keys persist (default `.vapid-keys.json`, git-ignored). |
+| `PUSH_DATA_FILE` | no | Scheduling-state file (default `.push-data.json`, git-ignored). |
+
+If the VAPID env vars are absent (local dev), the server generates a keypair
+once and persists it to `PUSH_VAPID_FILE`.
+
+### Generating VAPID keys for production
+
+```bash
+node -e "import('./server/push/webpush.js').then(async m => { const k = await m.generateVapidKeys(); console.log('VAPID_PUBLIC_KEY=' + k.publicKey); console.log('VAPID_PRIVATE_KEY=' + k.privateKey); })"
+```
+
+Or simply let the server generate them once and copy the values out of the
+key file.
+
+### Running the notification server
+
+- **Local:** `npm start` — static app + push API + scheduler in one process.
+- **Split deployment:** host the static app anywhere (GitHub Pages/Netlify);
+  run the scheduler on an always-on machine with `PUSH_WORKER_ONLY=1 node server.js`
+  (or `node server/push-worker.js`) and point the client at it by defining
+  `window.LIFE_PROGRESS_PUSH_API = "https://your-push-host"` before app.js
+  loads. If unset, the client uses same-origin `/api/push/*`.
+
+### Scheduling semantics
+
+- Reminders are **daily recurring**; the server holds exactly **one pending
+  occurrence** per category and advances it after handling (no infinite job
+  lists).
+- Occurrence identity is deterministic: `deviceKey:category:dateKey-in-user-tz`
+  — the same date key the SW and page dedup against, so push and in-app
+  sweeps can never double-deliver.
+- **Restart-safe:** pending state is derived from the persisted subscription
+  records (atomic JSON file); the ledger records the last handled occurrence
+  per category. Restarting the server mid-day never re-delivers.
+- **Missed reminders (§11):** an occurrence not delivered within a 90 s grace
+  window (server down, etc.) is marked `missed` and **not** replayed — the
+  next day's occurrence is scheduled instead. No stale floods after recovery.
+- **Server downtime:** delivery resumes automatically; anything already past
+  its window is skipped as missed.
+- **Timezone correctness:** wall-clock times are materialized with `Intl`
+  against the device's IANA zone each time — DST shifts, midnight,
+  month/year boundaries and leap years all resolve correctly
+  (`js/timeCore.js`, unit-tested against `America/New_York` transitions).
+- **Timezone changes:** the client re-registers on sync with the device's
+  current IANA zone, so travel re-anchors every reminder.
+
+### Quiet hours
+
+Evaluated **twice**: the server refuses to schedule pushes inside the
+device's quiet window (suppress-forever, no replay — the next day's
+occurrence continues), and the service worker re-checks the same window at
+delivery time (device clock) as a second gate. Semantics are identical to
+V1.5: `[start, end)`, midnight-crossing supported, `start === end` disables.
+
+### Deduplication (§13)
+
+Three layers share one identity space:
+
+1. **Server ledger** — `claimOccurrence` is atomic; duplicate ticks,
+   restarts or worker double-starts cannot send twice.
+2. **Service worker** — validates `dateKey` and re-checks the same
+   IndexedDB dedup records the page uses (`notificationState` store).
+3. **In-app sweep** (kept as reconciliation, §32) — skips anything push
+   already delivered. Opening the app can never duplicate a notification.
+
+### Test notification
+
+Settings → Notifications → **Send** now exercises the **real push path**
+first: client → subscription → server → Web Push → service worker → OS.
+It reports which path delivered (`push` vs local fallback) and fails loudly
+when the push infrastructure is unavailable (e.g. server down).
+
+### Unsupported platforms — honest behavior
+
+The settings screen shows a delivery status row with explicit states:
+**Background reminders active** / **Setting up background reminders…**
+(server unreachable — reminder saved locally, syncs later) / **Notifications
+are disabled** / **Background reminders aren't supported on this browser** /
+**Needs a secure (https) connection** / **Couldn't activate background
+reminders. Your reminder is saved locally.** Nothing ever fakes "active".
+
+Platform notes:
+- **Android/Chrome:** full background push (installed PWA or browser tab).
+- **iOS/iPadOS 16.4+:** Web Push works for **Home Screen web apps** — add to
+  Home Screen first, then enable notifications from the installed app. In
+  regular Safari tabs iOS does not deliver background push; the UI shows the
+  unsupported state rather than pretending.
+- **Desktop Chrome/Edge/Firefox:** supported (delivery while the browser
+  itself is running; OS-level rules apply once the browser quits).
+
+### Local testing recipe (catches the original bug)
+
+1. `npm start` → open `http://localhost:8080` (use a tunnel like
+   `ngrok http 8080` to test a real phone).
+2. Settings → Notifications → enable → grant permission → status shows
+   **Background reminders active**.
+3. Send the **test notification** — it must arrive through the push path.
+4. Set a water reminder 2–5 minutes ahead.
+5. **Completely close the app** (swipe away) and lock the screen.
+6. At the scheduled minute the OS notification must arrive.
+7. Tap it → Life Progress opens on the right screen.
+8. Reopen the app: the same occurrence must **not** appear again.
+
+### Security notes (§24)
+
+- VAPID private key exists only server-side (env or 0600 key file); it is
+  never served, logged or bundled.
+- All registration input is validated (endpoint scheme, key lengths, IANA
+  timezone, `HH:MM` times, category booleans); unknown fields are dropped.
+- Push payload routes pass through an allowlist — no injection into
+  navigation.
+- Rate limits guard the API; request bodies are size-capped.
+- Push endpoints/keys/timezones are the only stored data — nothing personal.
 
 ---
 
@@ -80,8 +239,8 @@ end-to-end here.
 - **Journal** — distraction-free editor with mood + tags, searchable timeline
   grouped by day, streak/total/month stats, edit & delete.
 - **Settings** — light/dark/system theme, name, background, water target +
-  unit, per-feature preferences, **notifications (V1.5)**, **JSON export/import**,
-  and confirmed full-data wipe.
+  unit, per-feature preferences, **notifications (V1.5 + V1.6 background
+  push)**, **JSON export/import**, and confirmed full-data wipe.
 - **Onboarding** — short 5-step first-launch flow (name, water target, theme,
   background).
 - **Empty, loading, error & permission states** everywhere that matters —
@@ -94,24 +253,30 @@ end-to-end here.
 ```
 index.html                 App shell (screen root, tab bar, modal/toast/onboarding roots)
 manifest.webmanifest       PWA manifest
-sw.js                      Service worker (offline app shell)
-server.js                  Zero-dependency static server (dev)
+sw.js                      Service worker (offline shell + push event + deep links)
+server.js                  Static server + push API + scheduler loop (dev)
+server/
+  api.js                   /api/push/* — subscription lifecycle (validated, rate-limited)
+  scheduler.js             Background scheduler: occurrences, quiet hours, dedup, delivery
+  store.js                 Atomic JSON persistence (subscriptions + delivery ledger)
+  vapid.js                 VAPID credential loading (env → file → generated)
+  push/webpush.js          RFC 8291 aes128gcm encryption + RFC 8292 VAPID (Node WebCrypto)
+  push-worker.js           Standalone scheduler entry (split deployments)
 css/
   theme.css                Design tokens (dark + light themes)
   base.css                 Reset, typography, app frame, keyframes
   components.css           Buttons, cards, inputs, rings, tab bar, modals, charts…
   screens.css              Per-screen layout
 js/
-  utils.js                 Pure helpers: local-timezone dates, streaks, daily
-                           progress calculation, formatting  ← unit-tested
+  utils.js                 Pure helpers: local-timezone dates, streaks, progress  ← unit-tested
+  timeCore.js              V1.6: shared time/IANA-timezone/quiet-hours core ← unit-tested
   models.js                Entity factories + validation (goals, workouts, …)
   db.js                    IndexedDB wrapper — the ONLY place that touches storage
   settings.js              App settings cache + theme resolution
-  notifications.js         V1.5: local reminder engine — prefs, permission,
-                           context-aware eligibility, quiet hours, dedup,
-                           payload/deep-link creation (pure, unit-tested)
-  personalization.js       V1.1: launch quote + avatar helpers (pure, unit-tested)
-  launch.js                V1.1: cinematic motivational launch overlay
+  notifications.js         V1.5 notification domain — prefs, permission, eligibility,
+                           dedup, payloads (+ V1.6 push-aware test notification)
+  swPush.js                V1.6: SW push-handler logic (validated, gated, testable)
+  pushClient.js            V1.6: subscription manager (capability, subscribe, sync, wipe)
   water.js / goals.js / gym.js / photos.js / journal.js
                            Domain logic per feature (queries, stats, streaks)
   ui.js                    DOM helpers, icon set, toast, sheets/dialogs, haptics,
@@ -119,25 +284,19 @@ js/
   router.js                Hash router + bottom navigation
   onboarding.js            5-step first-launch flow
   app.js                   Bootstrap: settings → launch ritual → tab bar →
-                           onboarding → route → SW
+                           onboarding → route → SW → push re-sync
   screens/                 One module per screen (dashboard, water, goals, gym,
                            photos [+ compare], journal [+ editor], settings,
                            notifications settings, avatar)
 assets/
-  launch-bg.png            Bundled fallback launch background (generated by
-                           scripts/make-launch-bg.js — works offline)
-scripts/
-  make-icons.js            Generates icons/*.png with Node's zlib
-  smoke-test.js            End-to-end CDP test driving real Chrome
-  qa-extended.js           Extended QA (persistence, export/import, offline, mobile)
-  screenshots.js           Captures dark/light screenshots of every screen
-test/
-  utils.test.js            Node unit tests for dates, streaks, progress, formatting
+  launch-bg.png            Bundled fallback launch background
+scripts/                   Smoke/QA/screenshot tooling
+test/                      Node unit tests (incl. push-scheduling, push-sw, push-crypto)
 ```
 
 **Layering:** screens → domain modules → storage. Screens never touch
-IndexedDB directly; domain logic never touches the DOM. This is what makes
-the eventual cloud-sync swap a one-file change.
+IndexedDB directly; domain logic never touches the DOM. The push server is a
+separate layer that never becomes the source of truth for personal data.
 
 ---
 
@@ -154,144 +313,130 @@ A weighted combination of four components, each a fraction `0..1`:
 | Gym | 15% | did a workout today ? 1 : 0 |
 | Journal | 15% | wrote a journal entry today ? 1 : 0 |
 
-Inactive components (e.g. no goals defined today) are removed from **both**
-the numerator and denominator, so a quiet day never unfairly drags the score
-down. The weights are a single exported constant — `PROGRESS_WEIGHTS` — so
-tuning or adding components requires no UI changes.
+Inactive components are removed from **both** the numerator and denominator,
+so a quiet day never unfairly drags the score down.
 
 ### Streaks (`js/utils.js`)
 
 A streak counts consecutive days with the activity, where the most recent day
-is **today or yesterday** (so a user who hasn't acted *yet today* keeps their
-streak). Days are de-duplicated (multiple entries per day count once), gaps
-break the streak, and all arithmetic is pure local-date math, so week and
-month boundaries are handled correctly. Water streak = days at/above target;
-gym = days with a workout; journal = days with an entry; goals = days with at
-least one completed goal. Daily goals track completion **per day**, so they
-reset every morning without losing their history.
+is **today or yesterday**. Days are de-duplicated, gaps break the streak, and
+all arithmetic is pure local-date math.
 
 ---
 
 ## Privacy
 
-- Everything lives in **IndexedDB on this device**. Journal entries and
-  photos are never uploaded anywhere.
-- Photos are downscaled and re-encoded locally before storage; grids render
-  thumbnails, and object URLs are revoked on screen change.
-- No analytics, no telemetry, no accounts, no network requests beyond the
-  app's own static files.
-- Export/import are local JSON files; "Clear all data" requires confirmation.
-
----
+- Everything personal lives in **IndexedDB on this device**. Journal entries
+  and photos are never uploaded anywhere — including in push payloads.
+- The push server stores only delivery metadata (see above).
+- No analytics, no telemetry, no accounts, no third-party SDKs.
+- Export/import are local JSON files; "Clear all data" requires confirmation
+  and also removes the device's push registration.
 
 ## Backup & export
 
 1. Open **Settings → Data → Export data** — a full JSON backup (all goals,
    workouts, water history, journal entries, photos **including image data**,
-   and settings) is downloaded to your device.
+   settings and notification prefs) is downloaded to your device.
 2. To restore: **Settings → Data → Import data** and pick the backup file.
-   Importing **replaces** everything currently on the device (you'll be asked
-   to confirm first).
-3. Keep the exported file somewhere safe — cloud drive, SD card, computer.
-   The backup is a plain JSON file you can read anywhere; your data never
-   touches any server during export or import.
+   Importing **replaces** everything currently on the device; background
+   delivery is re-registered to match the imported prefs.
+3. The backup is a plain JSON file; your data never touches any server
+   during export or import.
 
 ## PWA installation
 
 **Android (Chrome):** open the site → menu ⋮ → *Add to Home screen* →
 Install. The app launches full-screen, standalone, and works offline.
 
-**iOS (Safari):** open the site → Share → *Add to Home Screen*. (iOS uses
-the `apple-touch-icon` and `apple-mobile-web-app-*` meta tags that ship in
-`index.html`.)
+**iOS (Safari):** open the site → Share → *Add to Home Screen*. Push
+notifications require the installed Home Screen app (iOS 16.4+).
 
 **Desktop (Chrome/Edge):** an install icon appears in the address bar.
 
-Installation requires **HTTPS** (or localhost). The app must be served as
-static files — any static host works, see below.
+Installation and push require **HTTPS** (or localhost).
 
 ## Deployment
 
-The app is a **fully static site** — no build step, no server code required.
-All asset paths are relative, so it deploys unchanged at a domain root
-**or** under a subpath (e.g. `https://user.github.io/repo/`).
+The app itself remains a **fully static site** (relative paths, deploys at a
+domain root or subpath — GitHub Pages, Netlify, Cloudflare Pages, Vercel,
+Firebase Hosting or any static server).
 
-Requirements for the host:
+Background reminders additionally need the notification backend on an
+always-on host:
 
-- Serve `index.html` for `/`
-- Serve all files with correct MIME types (`.js` as `text/javascript`,
-  `.webmanifest` as `application/manifest+json`, `.png` as `image/png`)
-- HTTPS (required for service worker + install prompt)
-- No build step needed — upload the repository contents as-is
-  (`.nojekyll` is included so GitHub Pages serves everything untouched)
+```bash
+VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT=mailto:you@example.com \
+PUSH_DATA_FILE=/var/data/life-progress/push.json \
+node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
+```
 
-Deploy targets that work out of the box: **GitHub Pages**, Netlify,
-Cloudflare Pages, Vercel, Firebase Hosting, or any static web server.
-
-After deploying an update, the service worker cache version in `sw.js`
-(`life-progress-v1.2`) should be bumped so installed clients pick up the
-new assets.
+- The scheduler is a **persistent worker process** (15 s tick, restart-safe).
+  On a platform without long-running processes, run it on any always-on box
+  (Raspberry Pi, home server, VPS) via systemd/PM2; the static app can stay
+  on the static host and point at the worker through
+  `window.LIFE_PROGRESS_PUSH_API`.
+- State survives restarts in `PUSH_DATA_FILE`; the first tick after startup
+  only handles occurrences inside the grace window (no stale flood).
+- After deploying an update, bump the service worker cache version in `sw.js`
+  (`life-progress-v1.12`).
 
 ## Testing
 
-- **Unit** (`npm test`): 254 tests covering date helpers, streak edge cases
-  (gaps, duplicates, month boundaries, daily-goal reset), the weighted
-  progress calculation, water math, per-day goal semantics and formatting,
-  quote sanitization, initials and avatar normalization, pose/coordinate
-  suites and the V1.4 gym domain (template CRUD semantics, pre-fill from last
-  workout, session mutations, completion, PR detection, wipe safety).
-- **End-to-end** (`npm run smoke`): drives the real app in headless Chrome
-  over CDP (Node's built-in WebSocket, no dependencies) through the entire
-  journey: onboarding → dashboard → add water → create & complete a goal →
-  log a workout → upload a real photo through the file picker → write a
-  journal entry → settings → **reload and verify persistence**. It also
-  asserts zero unhandled JS errors. Runs against a fresh browser profile
-  every time.
-- **Extended QA** (`npm run qa`): persistence across a full browser restart,
-  export → wipe → import round-trip (photo blobs included), offline mode with
-  the server down, mobile overflow checks at 360/320px, PWA asset checks and
-  a privacy scan of console output.
-- **V1.1 QA** (`npm run qa:v11`): 78 checks for the new features — launch
-  overlay (first/subsequent launch, exact default quote, Dashboard-background
-  relationship, bundled fallback, skip, auto-dismiss failsafe, no replay
-  during navigation, reduced motion, offline), quote editor (counter, live
-  preview, persistence, reset), avatar flows (built-in grid, initials, real
-  gallery pick, Dashboard/Settings integration, blob persistence),
-  export/import of personalization, full-restart persistence and overflow at
-  320/360/390/412px.
-- **Smart camera QA** (`npm run qa:camera`): 88 checks for the reference-aware
-  progress camera — template analysis (on-device, metadata-only profiles),
-  live camera + ghost overlay + skeleton, guidance/meter/stability/auto
-  capture, the saved crop matching the aligned composition, lifecycle (tracks
-  stopped, detector paused, 10 open/close cycles), the model-missing and
-  permission-denied fallbacks, export/wipe/import of profiles, orphan pruning,
-  the **real vendored model** initialising and inferring on-device, offline
-  (server down, app shell from cache), reduced motion, accessibility and
-  320–1024px layouts in both themes.
-- **Notifications QA** (`npm run qa:notif`): real-browser checks for the V1.5
-  notification foundation — settings section render + toggles, permission
-  asked only from the user's action (never at startup), water eligibility
-  driven by REAL data (target met ⇒ silent, unmet ⇒ eligible), dedup across
-  repeated sweeps and reload, quiet-hours gating, achievement notification
-  once-only contract, export/import of prefs, wipe clearing prefs + dedup
-  state, service-worker notificationclick deep-link handler, 320–1024px
-  overflow, light theme, reduced motion and zero console errors.
-- **Gym templates QA** (`npm run qa:gym`): real-browser checks for the V1.4
-  gym redesign — template-first home + honest empty state, create/edit/rename/
-  duplicate/delete flows with the exercise library, session pre-fill from last
-  workout (history never mutated), set-based logging (steppers, tap-to-complete,
-  add/remove set, add/remove exercise mid-session), reload resume from the
-  active-workout record, completion summary with PR detection, streak/achievement
-  continuity, template deletion preserving history, export/wipe/import of the
-  new stores, 320–1024px overflow, light theme, reduced motion and zero console
-  errors. V1.4.1 adds: directly typed weight/reps (including decimals like
-  62.5, cleared and re-typed values), per-set Remove with guarded confirmation,
-  correct renumbering and value preservation after deletion, the min-1-set
-  rule, and the full custom-exercise journey — create from the picker,
-  duplicate-name reuse (case-insensitive), persistence across reload,
-  search discovery, session/template integration and pre-fill from history.
-- Screenshots (`npm run screenshots`, `npm run screenshots:camera`) are written
-  to `screenshots/`.
+- **Unit** (`npm test`): 344 tests — the original 301 (dates, streaks,
+  progress, gym, notification domain, pose/coordinates) **plus 43 new** for
+  V1.6: IANA timezone materialization (Kolkata, New York DST transitions,
+  spring-forward gaps, midnight/month/year/leap-year boundaries), the
+  delivery policy (grace window, missed-occurrence, quiet hours), the
+  deterministic occurrence-id scheme, the minimal payload shape, the service
+  worker push handler (gate order, cross-mechanism dedup, silent
+  "not-useful-now", fallback copy, payload validation/route allowlist) and
+  the Web Push crypto (VAPID ES256 JWT verified independently, aes128gcm
+  encrypt→decrypt round-trip, malformed-key rejection).
+- **End-to-end** (`npm run smoke`): full app journey in headless Chrome.
+- **Extended QA** (`npm run qa`): persistence, export→wipe→import round-trip,
+  offline mode, mobile overflow, privacy scan.
+- **Notifications QA** (`npm run qa:notif`): real-browser notification
+  checks (settings render, permission from user action only, eligibility
+  from real data, dedup across reloads, quiet hours, achievements wiring,
+  export/import/wipe of notification state, responsive 320–1024 px, light
+  theme, reduced motion, zero console errors).
+- Real-device background-push QA: see the *Local testing recipe* above and
+  run it on an Android phone (and an iOS 16.4+ Home Screen app) — closed app,
+  locked screen, notification at the scheduled minute, tap → deep link, no
+  duplicates on reopen.
+
+---
+
+## V1.6 status
+
+**V1.6 — true background reminder delivery via Web Push (additive).** The
+V1.5 local-first foundation, eligibility engine, quiet hours, dedup records,
+deep links and wording are unchanged; only the delivery mechanism was
+replaced:
+
+- The app no longer relies on page timers for delivery. A server-side
+  scheduler (own process, persisted state) computes the next occurrence per
+  device/category in the device's IANA timezone and delivers via Web Push
+  (RFC 8291 + RFC 8292, zero-dependency Node implementation).
+- The existing service worker gained `push` + `pushsubscriptionchange`
+  handlers (additive; offline strategy untouched, cache bumped to v1.12).
+  Context-aware copy is derived locally at delivery time; the payload holds
+  no personal data.
+- The in-app sweep remains as reconciliation only — deduped against push
+  through the same `notificationState` records.
+- New client module `js/pushClient.js` owns capability detection, the
+  permission/subscription flow, boot re-sync, `pending`/`error` states and
+  wipe support; the settings screen shows the honest delivery status (§33).
+- Test notification exercises the real push path and reports which path
+  delivered.
+- Export/import preserve notification prefs; import re-syncs the server;
+  full wipe deregisters and unsubscribes the device.
+
+Quality gate (this tree): `npm test` 344/344 passing (301 pre-existing +
+43 new), server API sanity verified live (vapid-public, register, invalid
+rejection, status). Smoke/QA suites and real-device verification are run
+per the recipe above before calling the feature done on hardware.
 
 ---
 
@@ -304,204 +449,53 @@ gate before it is allowed to appear.
 
 - **Architecture** (`js/notifications.js`): settings UI → notification domain
   → eligibility engine → Notification API / service worker. Eligibility is
-  always DERIVED from the authoritative activity stores (water entries, gym
-  workouts, goals, journal, streaks) — nothing is duplicated into a second
-  database. The `notificationState` store (DB v5, additive) holds only
-  preferences (singleton `prefs`) and per-reminder dedup records.
-- **Permission**: requested ONLY from an explicit user action (enabling the
-  master toggle or sending the test notification) — never at startup. Denied
-  permission shows a calm explanation instead of re-prompting. States:
-  unsupported / default / granted / denied.
+  always DERIVED from the authoritative activity stores. The
+  `notificationState` store (DB v5, additive) holds only preferences
+  (singleton `prefs`) and per-reminder dedup records.
+- **Permission**: requested ONLY from an explicit user action. Denied
+  permission shows a calm explanation instead of re-prompting.
 - **Categories**: water, gym, goals, journal, streaks, achievements — each
-  independently toggleable; the four daily ones have configurable local-clock
-  reminder times ("11:00", not timezone-dependent UTC).
-- **Quiet hours**: global window (default 22:30–07:00), midnight-crossing
-  ranges supported, boundary semantics explicit (start inclusive, end
-  exclusive), start === end disables.
+  independently toggleable; the four daily ones have configurable
+  local-clock reminder times.
+- **Quiet hours**: global window (default 22:30–07:00), midnight-crossing,
+  start inclusive / end exclusive, start === end disables.
 - **Context-aware suppression**: water target met ⇒ silent; no water target
   ⇒ silent; workout today or < 3 rest days ⇒ silent; never trained ⇒ silent;
   journal entry exists ⇒ silent; no pending goals ⇒ silent; streak safe
-  (today's action done) ⇒ silent; no live streak ⇒ never fabricated.
+  ⇒ silent; no live streak ⇒ never fabricated.
 - **Dedup**: a reminder for a logical period can only be delivered once —
-  delivery markers are written only AFTER a real display, so reloads, repeated
-  sweeps, double engine initialization or a service-worker restart can never
-  duplicate a notification. Records older than 30 days are pruned.
+  delivery markers are written only AFTER a real display.
 - **Achievements**: the existing celebration stays authoritative; a system
-  notification is an additional entry point, deduped per achievement (once,
-  ever).
-- **Service worker**: `notificationclick` focuses a running app and navigates
-  via the SAME hash routes the in-app router uses (water → #/water, gym →
-  #/gym, goals → #/goals, journal → #/journal, achievements → #/achievements);
-  with no window open it deep-links directly. Cache version bumped; existing
-  offline strategy untouched.
-- **Local-first**: no push server, no Firebase/OneSignal, no analytics, no
-  external APIs. Reminder content is generated on-device from local data;
+  notification is an additional entry point, deduped per achievement.
+- **Deep links**: water → #/water, gym → #/gym, goals → #/goals, journal →
+  #/journal, achievements → #/achievements.
+- **Local-first**: reminder content is generated on-device from local data;
   journal content is NEVER included in any notification payload.
-
-**Platform limitation (documented honestly):** without a Web Push
-subscription, browsers cannot reliably schedule background notifications —
-local reminders therefore evaluate when the app is opened/foregrounded (boot,
-`visibilitychange`, and a light 15-minute interval while the page is open).
-If the app stays closed all day, no reminder can fire; this is exactly what a
-future Web Push phase will add, using the same payload/dedup/domain shape
-already in place.
-
-Quality gate (all verified on the current commit):
-
-- `npm test` — 301/301 passing (31 new notification-domain tests)
-- `npm run qa:notif` — 33/33 checks passing (real browser)
-- all pre-existing suites keep passing (smoke, qa, v1.1, v1.2 ×2, gym)
 
 ---
 
 ## V1.4 status
 
-**V1.4 — gym templates + set-based workout sessions (additive).** The gym
-recedes from "fill out a form" to "choose the workout I'm doing today":
-
-- **Workout templates** (`js/gymTemplates.js`, stores `workoutTemplates`,
-  `exerciseLibrary`, `activeWorkout` — DB v4, purely additive). A template is a
-  reusable plan ("Push Day"); only completed sessions become historical
-  workouts and feed streaks, achievements, history and the dashboard.
-- **Pre-fill from last workout** — every exercise in a new session starts from
-  its most recent recorded performance (§9); historical workouts are never
-  mutated, and the empty-workout flow (`#/gym/new`, dashboard quick action)
-  remains available.
-- **Set-based logging** — per-set weight/reps with both steppers and directly
-  editable numeric inputs (`inputmode="decimal"` for weight, integer for reps;
-  0.5 kg precision preserved), persisted to the active workout on edit so
-  values survive navigation and reload, tap-to-complete with reduced motion
-  support, add/remove sets (guarded confirmation, min-1 rule, renumbering)
-  and exercises for TODAY only (skipping an exercise never edits the
-  template), rest timer (optional, dismissible), beat-last-time pills and
-  honest PR detection (strict improvement over real history; first-ever
-  performances set the baseline, they don't invent PRs).
-- **Resume** — unfinished sessions persist in the active-workout record and
-  survive reload/offline; the gym home shows a WELCOME BACK banner with a
-  guarded Discard action.
-- **Templates are not history** — deleting a template never deletes the
-  workouts performed with it; editing a template only affects future sessions.
-- **Migration aid** — any completed workout can be saved as a template from
-  the session summary (SAVE AS TEMPLATE).
-
-**V1.4.1 — session polish (additive).** Two usability fixes on top of V1.4:
-
-- **Editable set values** — the weight and reps in every set row are real
-  numeric inputs (steppers remain). Weight accepts decimals down to 0.5 kg
-  precision; reps are positive integers. Edits update the in-memory session
-  immediately and persist to the active-workout record on input/blur, so a
-  half-typed value survives navigation and reload without waiting for
-  completion. Invalid input never crashes: empty cells keep the previous
-  value, negatives are clamped.
-- **Set deletion** — each set has a guarded Remove action (confirmation
-  dialog, no browser `alert()`). Deleting removes only that set, renumbers
-  the remaining rows and keeps their values/completion state; the last
-  remaining set cannot be deleted (use the existing exercise removal
-  instead). Historical workouts are never touched.
-- **User-created exercises** — both exercise pickers (mid-session and
-  template editor) end with a CREATE NEW EXERCISE action: name + optional
-  muscle group, saved into the existing `exerciseLibrary` store as a
-  first-class exercise. Custom exercises participate in search, templates,
-  sessions, pre-fill, history, PRs, export/import and wipe exactly like
-  predefined ones; duplicate names (case-insensitive) reuse the existing
-  record instead of creating a second one.
-
-Quality gate (all verified on the current commit):
-
-- `npm test` — 301/301 passing (adds the V1.4 template/session domain suite,
-  the V1.4.1 typed-input/set-deletion/custom-exercise suites and the V1.5
-  notification domain suite)
-- `npm run smoke` — passing
-- `npm run qa`, `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
-- `npm run qa:notif` — 33/33 notification checks passing
-- `npm run qa:gym` — 92/92 gym redesign + polish checks passing
-- `npm run smoke` — passing
-- `npm run qa`, `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
-- `npm run qa:gym` — 92/92 gym redesign + polish checks passing
-- `npm run qa:camera` — pre-existing headless mediapipe flake on this machine
-  (fails identically on the clean tree); all camera checks pass on hardware
-- `npm run screenshots` — 20 gym-state captures (V1.4 + V1.4.1 typed inputs,
-  set deletion, custom-exercise flows) alongside the existing set
-
----
+**V1.4 — gym templates + set-based workout sessions (additive).** Workout
+templates (`js/gymTemplates.js`), pre-fill from last workout, set-based
+logging with typed values, guarded set deletion, custom exercises, resume of
+unfinished sessions. Historical workouts are never mutated; deleting a
+template never deletes workouts.
 
 ## V1.3 status
 
-**V1.3 — reference-aware smart progress camera (additive).** Progress photos,
-history, comparison, achievements and export/import behave exactly as before;
-the smart camera is an optional enhancement on top of the existing capture path.
-
-How it works:
-
-- **Photo template** — any existing progress photo can become the active
-  template. Its pose is analysed *on device* and stored as a compact,
-  versioned metadata profile (`js/pose/reference.js`, IndexedDB store
-  `photoReferences`). The photo itself stays the single authoritative record:
-  no copy, no re-encode, no extra bytes.
-- **Alignment** — `js/pose/alignment.js` compares the live pose with the
-  profile in ONE canonical composition space (`js/camera/coordinates.js`)
-  across position, scale/distance, framing, posture and head, using weighted,
-  confidence-aware scoring. It returns one prioritised instruction at a time
-  (no person → framing → distance → position → posture → stability → capture)
-  with hysteresis so guidance never flickers.
-- **Camera** — `js/screens/camera.js` shows the live preview with the previous
-  photo as a **ghost** overlay (Ghost / Outline / Off) and both skeletons,
-  adapts inference cadence to the device, requires ~1s of stable alignment
-  before the countdown, and always allows manual capture. The saved photo is
-  cropped to exactly the composition the user aligned to.
-- **Privacy/offline** — the runtime (`vendor/mediapipe/`) is self-hosted and
-  the pinned bundle contains no external URLs or telemetry; camera frames,
-  photos and landmarks never leave the device. Nothing loads until the smart
-  camera is opened, and after the first use the feature works offline from the
-  service-worker cache.
-- **Fallback** — unsupported browser, missing model, failed init, no camera or
-  denied permission all degrade to the existing standard capture path.
-
-Quality gate (all verified on the current commit):
-
-- `npm test` — 225/225 passing (includes 4 new pose/coordinate suites)
-- `npm run smoke` — passing
-- `npm run qa` — all extended checks passing
-- `npm run qa:v11`, `npm run qa:v12:phase1`, `npm run qa:v12:phase2` — passing
-- `npm run qa:camera` — 88/88 smart camera checks passing
-- `npm run screenshots:camera` — 10 camera screenshots (states, themes, 320/768px)
-
----
+**V1.3 — reference-aware smart progress camera (additive).** On-device pose
+profiles (`js/pose/reference.js`), alignment scoring, ghost/outline overlay,
+auto-capture, self-hosted vendored runtime, graceful fallback to the standard
+capture path. Camera frames and photos never leave the device.
 
 ## Known limitations / future work
 
-- Notifications (daily reminders) are not implemented — permission flow is
-  designed but the feature was intentionally left out until requested.
+- Background push requires an always-on notification backend (see
+  Deployment). Without it, reminders still work while the app is open, and
+  the settings screen says so honestly.
+- iOS delivers Web Push only to installed Home Screen web apps (16.4+).
+- Desktop browsers stop delivering push when the browser application itself
+  fully exits.
 - Cloud sync can be added by implementing the same interface `js/db.js`
   exposes against a remote service.
-- PWA install prompt requires a served (https or localhost) origin and a
-  fresh install; the app remains fully functional in a browser tab.
-
-## V1 status
-
-**V1 — READY FOR PERSONAL USE.** The UI and feature set are frozen for V1.
-
-Quality gate (all verified on the current commit):
-
-## V1.1 status
-
-**V1.1 — motivational launch + avatar personalization added; V1 UI and data
-untouched.** New settings fields (`launchQuote`, `avatar`, `avatarImage`) are
-merged onto existing records at load, so V1 users get the default quote and
-avatar automatically — no migration, no reinstall, no data loss.
-
-Quality gate (all verified on the current commit):
-
-- `npm test` — 57/57 passing (44 V1 + 13 V1.1)
-- `npm run smoke` — passing and repeatable (fresh profile per run)
-- `npm run qa` — 52/52 extended checks passing
-- `npm run qa:v11` — 78/78 V1.1 checks passing
-- `npm run screenshots` / `npm run icons` / `npm run launch-bg` — passing
-- Launch experience, avatars, quote editing, export/import, offline launch,
-  reduced-motion and 320–412px layouts all verified in headless Chrome
-
-## V1 status
-
-**V1 — READY FOR PERSONAL USE.** The UI and feature set are frozen for V1.
-
-Quality gate (all verified on the current commit):

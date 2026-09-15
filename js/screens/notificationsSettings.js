@@ -1,16 +1,22 @@
 /**
- * Settings → Notifications (V1.5).
+ * Settings → Notifications (V1.5 + V1.6).
  *
- * Pure presentation + user actions; every rule lives in js/notifications.js.
- * Rendered into the #notif-section host that settings.js provides, so the
- * existing Settings screen keeps its own layout untouched. Toggle UX uses the
- * design system's .switch; permission is only ever requested from an explicit
- * user tap (master toggle or test notification) — never at startup.
+ * Pure presentation + user actions; every rule lives in js/notifications.js
+ * and js/pushClient.js. Rendered into the #notif-section host that settings.js
+ * provides, so the existing Settings screen keeps its own layout untouched.
+ * Toggle UX uses the design system's .switch; permission is only ever
+ * requested from an explicit user tap (master toggle or test notification) —
+ * never at startup.
+ *
+ * V1.6 adds the background-delivery status block (§33): honest states for
+ * enabled/active, pending sync, permission denied, unsupported browser and
+ * errors — never a fake "active".
  */
 
-import { getSettings } from '../settings.js';
 import * as notif from '../notifications.js';
 import * as ui from '../ui.js';
+
+const pushClient = () => import('../pushClient.js');
 
 /** Category rows: icon, label, sub. Order matches notif.CATEGORIES. */
 const CATEGORY_META = {
@@ -43,6 +49,46 @@ export function mountNotifications(root) {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery status (§33) — honest, jargon-free
+// ---------------------------------------------------------------------------
+
+/** Map the persisted push state to the UI row. Pure. */
+export function deliveryStatusFor(pushState, perm, supported) {
+  if (!supported) {
+    return { tone: 'warn', icon: 'alert', label: 'Background reminders aren’t supported on this browser', detail: 'In-app reminders still work while Life Progress is open.' };
+  }
+  if (perm === 'denied') {
+    return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for this site in your browser settings to receive reminders.' };
+  }
+  switch (pushState?.status) {
+    case 'active':
+      return { tone: 'ok', icon: 'check', label: 'Background reminders active', detail: 'Reminders arrive even when Life Progress is closed.' };
+    case 'pending':
+      return { tone: 'warn', icon: 'refresh', label: 'Setting up background reminders…', detail: 'Your reminder is saved locally and syncs when the notification server is reachable.' };
+    case 'insecure':
+      return { tone: 'warn', icon: 'lock', label: 'Background reminders need a secure connection', detail: 'Open Life Progress over https (or localhost) to enable them.' };
+    case 'error':
+      return { tone: 'warn', icon: 'alert', label: 'Couldn’t activate background reminders. Your reminder is saved locally.', detail: pushState?.reason || 'Try again from a connected device.' };
+    case 'unsupported':
+      return { tone: 'warn', icon: 'alert', label: 'Background reminders aren’t supported on this browser', detail: pushState?.reason || 'In-app reminders still work while Life Progress is open.' };
+    default:
+      return { tone: 'muted', icon: 'bell', label: 'Background reminders are off', detail: 'Turn reminders on below to activate them.' };
+  }
+}
+
+function statusRowMarkup(status) {
+  const color = { ok: 'var(--success, #2fbf71)', warn: 'var(--warning)', muted: 'var(--text-2)' }[status.tone] || 'var(--text-2)';
+  return `
+    <div class="settings-row notif-status" data-status="${status.tone}">
+      <div class="settings-row-icon" style="background:color-mix(in srgb,${color} 12%,transparent);color:${color}">${ui.icon(status.icon, 18)}</div>
+      <div class="settings-row-main">
+        <div class="settings-row-title">${ui.escapeHtml(status.label)}</div>
+        <div class="settings-row-sub">${ui.escapeHtml(status.detail || '')}</div>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -56,6 +102,8 @@ async function renderNotifications(root, host) {
   }
   const perm = notif.permissionState();
   const supported = notif.notificationsSupported();
+  const pushState = await pushClient().then((m) => m.currentPushState()).catch(() => ({ status: 'off' }));
+  const status = deliveryStatusFor(pushState, perm, supported);
   const permNote = {
     unsupported: 'This browser doesn’t support notifications.',
     denied: 'Notifications are blocked in your browser settings.',
@@ -95,6 +143,7 @@ async function renderNotifications(root, host) {
         Stay consistent without the noise — only reminders you actually need.
       </div>
       <div class="settings-group">
+        ${prefs.enabled ? statusRowMarkup(status) : ''}
         <div class="settings-row">
           <div class="settings-row-icon" style="background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)">${ui.icon('bell', 18)}</div>
           <div class="settings-row-main">
@@ -160,17 +209,42 @@ async function toggleNotifications(root, host) {
         return;
       }
     }
+    // V1.6 — register background push NOW, from this explicit user action.
+    ui.toast('Setting up background reminders…', 'info');
+    const { subscribeAndRegister } = await pushClient();
+    const nextPrefs = await notif.saveNotificationPrefs({ enabled: true });
+    const reg = await subscribeAndRegister(nextPrefs).catch((err) => ({ ok: false, state: { status: 'error', reason: String(err?.message || err) } }));
+    ui.haptic();
+    if (reg.ok) {
+      ui.toast('Background reminders active', 'success');
+    } else if (reg.state?.status === 'pending') {
+      ui.toast('Reminder saved — will sync when the server is reachable', 'info');
+    } else if (reg.state?.status === 'unsupported' || reg.state?.status === 'insecure') {
+      ui.toast(reg.state.reason || 'Background reminders aren’t available here.', 'info');
+    } else {
+      ui.toast('Reminder saved locally, but background delivery failed.', 'info');
+    }
+    renderNotifications(root, host);
+    return;
   }
-  await notif.saveNotificationPrefs({ enabled: enabling });
+
+  // Disabling: stop background delivery too (§26 — no orphaned registrations).
+  await notif.saveNotificationPrefs({ enabled: false });
+  const { disablePush } = await pushClient();
+  await disablePush().catch(() => {});
   ui.haptic();
-  ui.toast(enabling ? 'Reminders on — set them up below' : 'Reminders off', enabling ? 'success' : 'info');
+  ui.toast('Reminders off', 'info');
   renderNotifications(root, host);
 }
 
 async function toggleCategory(root, host, category) {
   const prefs = await notif.getNotificationPrefs();
-  await notif.saveNotificationPrefs({ categories: { ...prefs.categories, [category]: !prefs.categories[category] } });
+  const next = await notif.saveNotificationPrefs({ categories: { ...prefs.categories, [category]: !prefs.categories[category] } });
   ui.haptic();
+  // Keep the server schedule in step with the new category state (§8).
+  pushClient()
+    .then((m) => m.syncPushRegistration(next))
+    .catch(() => {});
   renderNotifications(root, host);
 }
 
@@ -206,8 +280,12 @@ async function openReminderTimeSheet(root, host, category) {
     title: `${CATEGORY_META[category].label} reminder time`,
     value: prefs.times[category],
     onSave: async (t) => {
-      await notif.saveNotificationPrefs({ times: { ...prefs.times, [category]: t } });
+      const next = await notif.saveNotificationPrefs({ times: { ...prefs.times, [category]: t } });
       ui.toast('Reminder time updated', 'success');
+      // Re-register so the server schedules the new time (§8/§21).
+      pushClient()
+        .then((m) => m.syncPushRegistration(next))
+        .catch(() => {});
       renderNotifications(root, host);
     },
   });
@@ -238,9 +316,12 @@ async function openQuietHoursSheet(root, host) {
         ui.toast('Choose valid times.', 'info');
         return;
       }
-      await notif.saveNotificationPrefs({ quietStart: start, quietEnd: end });
+      const next = await notif.saveNotificationPrefs({ quietStart: start, quietEnd: end });
       ui.toast('Quiet hours updated', 'success');
       close();
+      pushClient()
+        .then((m) => m.syncPushRegistration(next))
+        .catch(() => {});
       renderNotifications(root, host);
     });
     wrap.append(startRow, endRow, save);
@@ -251,11 +332,15 @@ async function openQuietHoursSheet(root, host) {
 async function sendTest(root, host) {
   const result = await notif.sendTestNotification();
   if (result.ok) {
-    ui.toast('Test notification sent — check your notifications', 'success');
+    ui.toast(result.via === 'push' ? 'Test sent through the real push path — check your notifications' : 'Test notification sent — check your notifications', 'success');
   } else if (result.reason === 'unsupported') {
     ui.toast('This browser doesn’t support notifications.', 'info');
   } else if (result.reason === 'denied') {
     ui.toast('Notifications are blocked in your browser settings.', 'info');
+  } else if (result.reason === 'not-registered') {
+    ui.toast('Background reminders aren’t active yet — turn reminders on first.', 'info');
+  } else if (String(result.reason).startsWith('push-failed')) {
+    ui.toast('The push server couldn’t deliver the test. Check that the notification server is running.', 'info');
   } else {
     ui.toast('Permission not granted — reminders stay off.', 'info');
   }

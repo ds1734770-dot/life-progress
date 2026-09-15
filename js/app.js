@@ -46,11 +46,22 @@ async function boot() {
   // permanent) and celebrated once; unseen celebrations re-queue next start.
   checkAchievementsNow();
 
-  // V1.5 — local reminder sweep. Without a push server the browser can only
-  // notify while the app is alive, so reminders evaluate on boot, on every
-  // foreground (visibilitychange) and on a light interval while open. The
-  // dedup store guarantees each logical reminder shows once per day.
+  // V1.5 — local reminder sweep. KEPT as a secondary reconciliation layer
+  // only (§32): background push is now the primary delivery mechanism. The
+  // sweep still runs on boot/foreground while the page is open, deduped
+  // against push-delivered notifications through the same notificationState
+  // records, so opening the app can never duplicate a reminder.
   scheduleReminders();
+
+  // V1.6 — background push re-sync (§21/§20): reconcile the push subscription
+  // with current prefs. Non-blocking, never prompts, never duplicates
+  // subscriptions (server upserts by deviceKey). Catches:
+  //   · a reminder enabled while the server was unreachable (pending → active)
+  //   · prefs changed while the device was offline
+  //   · a subscription the browser replaced since last registration
+  import('./pushClient.js')
+    .then(({ syncPushRegistration }) => syncPushRegistration().catch(() => {}))
+    .catch(() => {}); // offline/broken storage — local-only mode keeps working
 }
 
 function scheduleReminders() {

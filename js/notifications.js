@@ -24,6 +24,17 @@
 import { dbGet, dbPut, dbGetAll, dbDelete, dbClear } from './db.js';
 import { dateKey, daysBetween } from './utils.js';
 
+// V1.6 — the pure time/quiet-hours core moved to js/timeCore.js so the server
+// scheduler, the service worker and the page share ONE definition. These
+// re-exports keep every existing import (and test) working unchanged.
+export {
+  timeToMinutes,
+  isValidTime,
+  formatTime12h,
+  inQuietHours,
+} from './timeCore.js';
+import { inQuietHours as _inQuietHours, isValidTime as _isValidTime } from './timeCore.js';
+
 export const STORE = 'notificationState';
 const PREFS_ID = 'prefs';
 
@@ -71,10 +82,10 @@ export function normalizePrefs(stored) {
   p.times = { ...d.times, ...(s.times || {}) };
   for (const c of CATEGORIES) p.categories[c] = p.categories[c] !== false;
   for (const c of Object.keys(d.times)) {
-    if (!isValidTime(p.times[c])) p.times[c] = d.times[c];
+    if (!_isValidTime(p.times[c])) p.times[c] = d.times[c];
   }
-  if (!isValidTime(p.quietStart)) p.quietStart = d.quietStart;
-  if (!isValidTime(p.quietEnd)) p.quietEnd = d.quietEnd;
+  if (!_isValidTime(p.quietStart)) p.quietStart = d.quietStart;
+  if (!_isValidTime(p.quietEnd)) p.quietEnd = d.quietEnd;
   return p;
 }
 
@@ -87,32 +98,6 @@ export async function saveNotificationPrefs(patch) {
   const next = normalizePrefs({ ...current, ...patch, updatedAt: Date.now() });
   await dbPut(STORE, next);
   return next;
-}
-
-/** "HH:MM" → minutes since midnight. Returns null when invalid. */
-export function timeToMinutes(t) {
-  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(t || '').trim());
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-export function isValidTime(t) {
-  return timeToMinutes(t) !== null;
-}
-
-/** "14:30" → "2:30 PM" using the user's locale. */
-export function formatTime12h(t) {
-  const mins = timeToMinutes(t);
-  if (mins === null) return String(t || '');
-  const [h, m] = [Math.floor(mins / 60), mins % 60];
-  try {
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  } catch {
-    const h12 = h % 12 || 12;
-    return `${h12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,22 +130,9 @@ export async function requestPermission() {
 }
 
 // ---------------------------------------------------------------------------
-// Quiet hours
+// Quiet hours — re-exported from js/timeCore.js at the top of this file
+// (identical semantics; the V1.5 tests keep passing unchanged).
 // ---------------------------------------------------------------------------
-
-/**
- * True when `minutes` (or now) is inside [start, end). Crossing midnight is
- * supported: 22:30→07:00 covers 23:00 and 03:00; 07:00→22:30 covers 12:00.
- * Zero-length ranges (start === end) mean "no quiet hours".
- */
-export function inQuietHours(minutes = null, start = null, end = null) {
-  const s = timeToMinutes(start ?? '22:30');
-  const e = timeToMinutes(end ?? '07:00');
-  if (s === null || e === null || s === e) return false;
-  const m = minutes ?? new Date().getHours() * 60 + new Date().getMinutes();
-  if (s < e) return m >= s && m < e;
-  return m >= s || m < e; // crosses midnight
-}
 
 // ---------------------------------------------------------------------------
 // Deduplication (persistent, reload/SW-restart safe)
@@ -196,7 +168,7 @@ export function reminderBlocked(prefs, { category, key, period, now = new Date()
   if (!prefs.enabled) return 'master-off';
   if (category && !prefs.categories[category]) return 'category-off';
   const minutes = now.getHours() * 60 + now.getMinutes();
-  if (inQuietHours(minutes, prefs.quietStart, prefs.quietEnd)) return 'quiet-hours';
+  if (_inQuietHours(minutes, prefs.quietStart, prefs.quietEnd)) return 'quiet-hours';
   return null; // not blocked — dedup + activity checks happen at delivery
 }
 
@@ -246,14 +218,40 @@ export async function showNotification(payload) {
   }
 }
 
-/** Send the Settings → test notification (requests permission if needed). */
+/**
+ * Send the Settings → test notification (requests permission if needed).
+ *
+ * V1.6 — the test exercises the REAL push path first (§16):
+ *   client → subscription → server → Web Push → service worker → OS alert.
+ * A local Notification API fallback runs only when background push isn't
+ * registered (unsupported browser, offline server) so the button always does
+ * something honest. The result says exactly which path delivered.
+ */
 export async function sendTestNotification() {
-  if (!notificationsSupported()) return { ok: false, reason: 'unsupported' };
-  if (permissionState() === 'denied') return { ok: false, reason: 'denied' };
+  if (!notificationsSupported()) return { ok: false, reason: 'unsupported', via: null };
+  if (permissionState() === 'denied') return { ok: false, reason: 'denied', via: null };
   if (permissionState() === 'default') {
     const result = await requestPermission();
-    if (result !== 'granted') return { ok: false, reason: result };
+    if (result !== 'granted') return { ok: false, reason: result, via: null };
   }
+
+  // 1) Real push path (only when background delivery is actually registered).
+  try {
+    const { sendTestPush, currentPushState } = await import('./pushClient.js');
+    const pushState = await currentPushState();
+    if (pushState.status === 'active') {
+      const pushResult = await sendTestPush();
+      if (pushResult.ok) return { ok: true, via: 'push', reason: null };
+      return {
+        ok: false,
+        via: 'push',
+        reason: pushResult.reason === 'not-registered' ? 'not-registered' : `push-failed: ${pushResult.reason}`,
+      };
+    }
+  } catch { /* fall through to the local path */ }
+
+  // 2) Local path (page-open notifications only — used when background push
+  //    is unavailable; the UI labels this clearly).
   const payload = buildPayload({
     title: 'Life Progress',
     body: 'Notifications are working 🔔 Your reminders are ready to help you stay consistent.',
@@ -261,7 +259,7 @@ export async function sendTestNotification() {
     tag: 'test',
   });
   const shown = await showNotification(payload);
-  return { ok: shown, reason: shown ? null : 'failed' };
+  return { ok: shown, via: shown ? 'local' : null, reason: shown ? null : 'failed' };
 }
 
 // ---------------------------------------------------------------------------

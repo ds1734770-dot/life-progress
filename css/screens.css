@@ -2495,6 +2495,14 @@
   color: var(--text);
 }
 
+/* V1.6 — background delivery status row (tone-colored icon, same surfaces) */
+.notif-status .settings-row-title {
+  font-weight: 700;
+}
+.notif-status[data-status='warn'] .settings-row-title {
+  color: var(--warning);
+}
+
 /* Calm explanation when the browser blocks notifications */
 .notif-denied-note {
   margin-top: 10px;

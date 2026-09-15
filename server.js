@@ -1,14 +1,34 @@
 /**
- * Tiny dependency-free static file server for the Life Progress PWA.
- * Usage: node server.js   (serves the project root on http://localhost:8080)
+ * Life Progress server.
+ *
+ * Two responsibilities, clearly separated:
+ *  1. Static file server for the PWA (behavior unchanged).
+ *  2. Notification backend (V1.6): push subscription API + Web Push delivery
+ *     + the background scheduler loop that delivers reminders while the app
+ *     is closed. `node server.js` starts both together for local use; the
+ *     scheduler can also run standalone via `node server/push-worker.js`
+ *     (see README — Production deployment).
+ *
+ * Environment variables:
+ *   PORT              listen port (default 8080)
+ *   VAPID_PUBLIC_KEY  base64url public key   (falls back to generated+persisted)
+ *   VAPID_PRIVATE_KEY base64url PKCS#8 key   (SERVER ONLY — never exposed)
+ *   VAPID_SUBJECT     mailto: or https: contact for the VAPID JWT
+ *   PUSH_DATA_FILE    override the scheduling-state file path
+ *   PUSH_VAPID_FILE   override the generated-keys file path
+ *   PUSH_WORKER_ONLY  run the scheduler WITHOUT static serving (§18)
  */
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { handlePushApi } from './server/api.js';
+import { loadState } from './server/store.js';
+import { getVapidConfig } from './server/vapid.js';
+import { runScheduler, schedulerTick } from './server/scheduler.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -31,6 +51,10 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     let pathname = decodeURIComponent(url.pathname);
+
+    // V1.6 — notification backend (mounted before static files).
+    if (await handlePushApi(req, res, pathname)) return;
+
     if (pathname === '/') pathname = '/index.html';
 
     // Prevent path traversal.
@@ -60,3 +84,37 @@ createServer(async (req, res) => {
 }).listen(PORT, () => {
   console.log(`Life Progress running at http://localhost:${PORT}`);
 });
+
+// ---------------------------------------------------------------------------
+// Notification backend startup
+// ---------------------------------------------------------------------------
+
+/** Non-secret startup banner (never logs private material — §24). */
+function logVapidInfo(config) {
+  console.log(`[push] VAPID ready (${config.source}) — public key ${config.publicKey.slice(0, 12)}…`);
+}
+
+const state = await loadState();
+const vapid = await getVapidConfig();
+logVapidInfo(vapid);
+
+if (process.env.PUSH_WORKER_ONLY) {
+  // Standalone scheduler (§18): no static files, just the delivery loop.
+  console.log('[push] worker-only mode: scheduler running, static serving disabled');
+  await runScheduler(vapid);
+} else {
+  // Integrated mode: tick-driven loop in the same process. Persisted state
+  // makes restarts safe; the first tick after startup only handles
+  // occurrences inside the grace window (§11 — no stale flood).
+  await schedulerTick(vapid); // catch anything due right now, then idle
+  setInterval(() => schedulerTick(vapid), 15 * 1000);
+  console.log('[push] scheduler running (15s tick)');
+}
+
+// Graceful shutdown — flush the write chain via process exit semantics.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    console.log(`[server] ${sig} received — shutting down`);
+    process.exit(0);
+  });
+}

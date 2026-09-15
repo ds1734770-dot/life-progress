@@ -3,7 +3,7 @@
  * Precaches the core assets at install time and serves them cache-first.
  * Cross-origin requests and data URLs are never cached or intercepted.
  */
-const CACHE = 'life-progress-v1.11';
+const CACHE = 'life-progress-v1.12';
 
 // Relative URLs (no leading slash) so the app deploys at a domain root OR a
 // subpath (e.g. GitHub Pages project sites) without changes.
@@ -35,6 +35,9 @@ const CORE_ASSETS = [
   './js/launch.js',
   './js/personalization.js',
   './js/notifications.js',
+  './js/timeCore.js',
+  './js/swPush.js',
+  './js/pushClient.js',
   './assets/launch-bg.png',
   './js/screens/notificationsSettings.js',
   './js/screens/dashboard.js',
@@ -113,6 +116,102 @@ self.addEventListener('fetch', (event) => {
         .catch(() => hit);
       return hit || network;
     })
+  );
+});
+
+// ---------------------------------------------------------------------------
+// V1.6 — BACKGROUND PUSH DELIVERY (Web Push).
+// The server wakes this service worker at the scheduled moment with a minimal
+// payload (category + dedup identity + route hint — never personal data).
+// The handler derives the context-aware copy LOCALLY from IndexedDB via the
+// same eligibility engine the in-app sweep uses, so background reminders:
+//   · fire at the scheduled time with the app fully closed,
+//   · suppress themselves when the context says so (water target met ⇒ silent),
+//   · dedupe against the in-app sweep through the SAME notificationState
+//     records (opening the app can never duplicate a delivered reminder).
+// The full logic lives in js/swPush.js (unit-tested). If the module path
+// fails (first-start network glitch, exotic environment), an INLINE minimal
+// fallback below still shows the reminder with static copy — a broken
+// import must never silently swallow a notification.
+// ---------------------------------------------------------------------------
+
+// Last-resort static copy + route allowlist (duplicated here on purpose: this
+// fallback must work even when NO module can be imported).
+const PUSH_FALLBACK_COPY = {
+  water: ['Time for some water 💧', 'A quick sip keeps your day on track.', '#/water'],
+  gym: ['Ready for a workout?', 'A short session keeps the rhythm going.', '#/gym'],
+  goals: ['Your goals are waiting', 'A few minutes now moves them forward.', '#/goals'],
+  journal: ['Take a minute for yourself', 'A short entry keeps your reflection going.', '#/journal'],
+  streaks: ['Your streak is alive 🔥', 'One quick action today keeps it going.', '#/dashboard'],
+  achievements: ['Life Progress', 'You have new progress to celebrate.', '#/achievements'],
+  test: ['Life Progress', 'Notifications are working 🔔 Background reminders are active.', '#/dashboard'],
+};
+
+function showFallbackNotification(raw) {
+  const entry = raw && typeof raw === 'object' ? PUSH_FALLBACK_COPY[raw.type === 'test' ? 'test' : raw.category] : null;
+  if (!entry) return false;
+  const [title, body, route] = entry;
+  return self.registration
+    .showNotification(title, {
+      tag: raw.type === 'test' ? 'test' : String(raw.category),
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      data: { route, app: 'life-progress' },
+    })
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function handlePushEvent(event) {
+  let raw = null;
+  try {
+    raw = event.data ? await event.data.json() : null;
+  } catch {
+    raw = null; // unparseable → nothing safe to show
+  }
+  // Primary path: full context-aware handling (dedup, gates, local copy).
+  try {
+    const notif = await import('./js/notifications.js');
+    const { processPush } = await import('./js/swPush.js');
+    const result = await processPush(raw, {
+      getNotificationPrefs: notif.getNotificationPrefs,
+      reminderBlocked: notif.reminderBlocked,
+      wasDelivered: notif.wasDelivered,
+      markDelivered: notif.markDelivered,
+      buildReminderContext: notif.buildReminderContext,
+      ELIGIBILITY: notif.ELIGIBILITY,
+      show: (n) => self.registration.showNotification(n.title, n.options),
+    });
+    // Deliberately silent outcomes (invalid payload, gates, "not useful now")
+    // must NOT fall back — suppressing IS the correct behavior there. Only an
+    // exception above reaches the fallback.
+    return result;
+  } catch (err) {
+    // Module path failed — show the static copy so the reminder survives.
+    const shown = await showFallbackNotification(raw);
+    return { shown, reason: shown ? 'fallback' : `error: ${err?.message || err}` };
+  }
+}
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(handlePushEvent(event));
+});
+
+// §20 — subscription rotated/expired while the app was closed: re-subscribe
+// with the cached VAPID key and re-register with the server. Best-effort;
+// the next app boot re-syncs anything this couldn't finish.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const notif = await import('./js/notifications.js');
+        const pushClient = await import('./js/pushClient.js');
+        const prefs = await notif.getNotificationPrefs();
+        if (!prefs.enabled) return;
+        const reg = await pushClient.syncPushRegistration(prefs);
+        return reg;
+      } catch { /* next boot reconciles */ }
+    })()
   );
 });
 
