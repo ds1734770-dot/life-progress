@@ -123,10 +123,13 @@ async function openDiagnosticsSheet(host) {
       line('Service worker registration', r.serviceWorker),
       line('Push manager on registration', r.pushManagerOnRegistration),
       line('Push subscription', r.subscription),
+      r.subscriptionError ? line('Subscription error', r.subscriptionError) : '',
       line('Server registration', r.serverRegistration),
-      line('Notification server reachability', r.vapid),
+      line('Notification server API', r.apiBase),
+      line('Notification server reachability', r.vapid + (r.serverHttpStatus && r.vapid !== 'reachable' ? ` (HTTP ${r.serverHttpStatus})` : '')),
+      r.vapidReason ? line('Server diagnosis', r.vapidReason) : '',
       line('Background reminders state', r.backgroundReminders),
-    ].join('');
+    ].filter(Boolean).join('');
     const done = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button', style: { marginTop: '10px' } }, 'Done');
     done.addEventListener('click', () => close());
     wrap.append(box, done);

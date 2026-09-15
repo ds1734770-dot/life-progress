@@ -90,7 +90,10 @@ function registerServiceWorker() {
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     // Relative URL — the SW controls the whole directory tree, so this works
     // at a domain root and under a subpath (e.g. GitHub Pages project sites).
-    navigator.serviceWorker.register('./sw.js').catch(() => {
+    // type:'module' — the push handler uses dynamic import() of ES modules;
+    // module workers guarantee that works on every engine (some engines,
+    // notably iOS WebKit, are strict about classic-worker import rules).
+    navigator.serviceWorker.register('./sw.js', { type: 'module' }).catch(() => {
       /* offline support is best-effort */
     });
   }

@@ -171,6 +171,9 @@ export async function processSubscription(sub, vapid, nowMs = Date.now()) {
 
     // Deliver. A transient failure retries a bounded number of times with
     // backoff; permanent failures (404/410) mark the record so it is skipped.
+    // Operational logs carry only the occurrence id — never personal data
+    // or credentials (§24).
+    console.log(`[push] sending occurrence ${occ.occurrenceId}`);
     let result = await deliverOccurrence(sub, occ, vapid);
     let attempts = 1;
     while (!result.ok && result.transient && attempts < 3) {
@@ -185,6 +188,11 @@ export async function processSubscription(sub, vapid, nowMs = Date.now()) {
       decidedAt: Date.now(),
     });
     await recordLedger(sub, occ);
+    if (result.ok) {
+      console.log(`[push] delivery accepted ${occ.occurrenceId}`);
+    } else {
+      console.error(`[push] delivery failed ${occ.occurrenceId} (status ${result.status || 'n/a'}, ${result.transient ? 'transient' : 'permanent'})`);
+    }
     handled++;
   }
 
@@ -243,6 +251,7 @@ export async function runScheduler(vapid, { tickMs = TICK_MS } = {}) {
   if (running) return; // duplicate worker startup is a no-op (§19)
   running = true;
   stopped = false;
+  console.log(`[push] scheduler started (tick ${tickMs}ms)`);
   while (!stopped) {
     try {
       await schedulerTick(vapid);

@@ -109,16 +109,42 @@ export function validateRegistration(body) {
 // ---------------------------------------------------------------------------
 
 /**
+ * CORS for split deployments (§9): the static app (GitHub Pages etc.) and
+ * this backend usually sit on DIFFERENT origins. Allowed origins come from
+ * the PUSH_ALLOWED_ORIGINS env var (comma-separated, exact match, e.g.
+ * "https://user.github.io"). When it is unset — personal/single-user
+ * deployments — the request origin is reflected (never a literal "*"; no
+ * credentials/cookies are involved anywhere in this API).
+ */
+function applyCors(req, res) {
+  const origin = req.headers?.origin;
+  if (!origin) return;
+  const allowList = (process.env.PUSH_ALLOWED_ORIGINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  if (allowList.length && !allowList.includes(origin)) return; // stays blocked
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '600');
+}
+
+/**
  * Handle push API requests. Returns true when the request was handled.
  */
 export async function handlePushApi(req, res, pathname) {
   if (!pathname.startsWith('/api/push/')) return false;
   const method = req.method;
   const ip = req.socket?.remoteAddress || 'unknown';
+  applyCors(req, res);
 
-  // CORS: the app and its API share an origin in production; permissive CORS
-  // only for the GET of the public key (harmless, non-secret) keeps local
-  // multi-port development workable.
+  // Browser preflight for cross-origin POSTs (split deployments).
+  if (method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return true;
+  }
+
   if (method === 'GET' && pathname === '/api/push/vapid-public') {
     const config = await getVapidConfig();
     json(res, 200, vapidPublicInfo(config));

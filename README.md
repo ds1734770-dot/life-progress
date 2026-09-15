@@ -363,11 +363,16 @@ domain root or subpath — GitHub Pages, Netlify, Cloudflare Pages, Vercel,
 Firebase Hosting or any static server).
 
 Background reminders additionally need the notification backend on an
-always-on host:
+always-on host. **This is mandatory when the app itself is on a static host
+(GitHub Pages, Netlify, Cloudflare Pages, …): static hosts cannot answer
+`/api/push/*`, and every request returns the host's HTML 404 page. Without a
+reachable backend, background reminders stay off (the diagnostics screen will
+say exactly that).**
 
 ```bash
 VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT=mailto:you@example.com \
 PUSH_DATA_FILE=/var/data/life-progress/push.json \
+PUSH_ALLOWED_ORIGINS=https://<user>.github.io \
 node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
 ```
 
@@ -376,6 +381,16 @@ node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
   (Raspberry Pi, home server, VPS) via systemd/PM2; the static app can stay
   on the static host and point at the worker through
   `window.LIFE_PROGRESS_PUSH_API`.
+- **Split deployment wiring:** edit `push-config.js` (repo root) and set
+  `window.LIFE_PROGRESS_PUSH_API = "https://your-push-host"` — the origin of
+  the machine running `server.js`. Then set `PUSH_ALLOWED_ORIGINS` on the
+  backend to the exact origin(s) the app is served from (comma-separated;
+  unset = reflect any origin, acceptable for a private single-user setup).
+  The backend must be reachable over **HTTPS** for push to work.
+- The settings → Notifications → **Diagnostics** screen shows the resolved
+  API URL, the raw HTTP status and a plain-language diagnosis (including
+  "backend is not deployed here — static hosting") when it detects that
+  signature.
 - State survives restarts in `PUSH_DATA_FILE`; the first tick after startup
   only handles occurrences inside the grace window (no stale flood).
 - After deploying an update, bump the service worker cache version in `sw.js`

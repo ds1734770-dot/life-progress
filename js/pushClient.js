@@ -116,6 +116,30 @@ export function unsupportedReason(caps = pushCapabilities()) {
 // nothing, prompts nothing.
 // ---------------------------------------------------------------------------
 
+/**
+ * Classify a GET /api/push/vapid-public response (pure — unit-tested).
+ * Distinguishes the three failure families the UI must never conflate:
+ *  · HTTP with HTML body → a STATIC host answered (its 404 page): backend
+ *    simply is not deployed at this origin.
+ *  · HTTP with non-2xx API answer → backend present but unhappy.
+ *  · thrown fetch → refused connection / CORS / DNS — a different problem.
+ */
+export function classifyServerProbe({ gotHttpResponse, ok, status, contentType, errorMessage }) {
+  if (gotHttpResponse && ok) return { vapid: 'reachable', staticHostSuspected: false, vapidReason: null };
+  if (gotHttpResponse) {
+    const staticHost = /text\/html/i.test(contentType || '');
+    return {
+      vapid: `http ${status}`,
+      serverHttpStatus: status,
+      staticHostSuspected: staticHost,
+      vapidReason: staticHost
+        ? 'No notification server at this origin — the backend is not deployed here (static hosting).'
+        : null,
+    };
+  }
+  return { vapid: 'unreachable', serverHttpStatus: null, staticHostSuspected: false, serverError: String(errorMessage || '') };
+}
+
 export async function pushReadiness() {
   const caps = pushCapabilities();
   const r = {
@@ -132,8 +156,11 @@ export async function pushReadiness() {
     swActive: false, swWaiting: false, swInstalling: false,
     pushManagerOnRegistration: false,
     subscription: 'none',
+    subscriptionError: null,
     serverRegistration: 'unknown',
     vapid: 'unknown',
+    serverHttpStatus: null,
+    staticHostSuspected: false,
     backgroundReminders: 'off',
   };
   if (!caps.swSupported) return r;
@@ -146,21 +173,35 @@ export async function pushReadiness() {
     r.swWaiting = !!reg.waiting;
     r.swInstalling = !!reg.installing;
     r.pushManagerOnRegistration = !!reg.pushManager;
-    const sub = reg.pushManager ? await reg.pushManager.getSubscription().catch(() => null) : null;
+    const sub = reg.pushManager ? await reg.pushManager.getSubscription().catch((err) => {
+      r.subscriptionError = String(err?.name || 'Error') + ': ' + String(err?.message || err);
+      return null;
+    }) : null;
     r.subscription = sub ? 'active' : 'none';
-  } catch {
+  } catch (err) {
     r.serviceWorker = 'error';
+    r.subscriptionError = r.subscriptionError || (String(err?.name || 'Error') + ': ' + String(err?.message || err));
   }
   try {
     const pushState = await currentPushState();
     r.serverRegistration = pushState?.deviceKey && pushState?.status === 'active' ? 'registered' : pushState?.status === 'pending' ? 'pending' : 'none';
     r.backgroundReminders = pushState?.status || 'off';
   } catch { /* keep defaults */ }
+  // Defaults — probe results are merged in below (§27).
+  r.serverHttpStatus = null;
+  r.staticHostSuspected = false;
+  r.vapidReason = null;
+  r.apiBase = API_BASE() || '(same origin)';
   try {
     const res = await fetch(`${API_BASE()}/api/push/vapid-public`, { method: 'GET' });
-    r.vapid = res.ok ? 'reachable' : `http ${res.status}`;
-  } catch {
-    r.vapid = 'unreachable';
+    Object.assign(r, classifyServerProbe({
+      gotHttpResponse: true,
+      ok: res.ok,
+      status: res.status,
+      contentType: res.headers?.get ? (res.headers.get('content-type') || '') : '',
+    }));
+  } catch (err) {
+    Object.assign(r, classifyServerProbe({ gotHttpResponse: false, errorMessage: err?.message || err }));
   }
   return r;
 }
