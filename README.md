@@ -383,16 +383,19 @@ node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
 
 ## Testing
 
-- **Unit** (`npm test`): 344 tests — the original 301 (dates, streaks,
-  progress, gym, notification domain, pose/coordinates) **plus 43 new** for
-  V1.6: IANA timezone materialization (Kolkata, New York DST transitions,
-  spring-forward gaps, midnight/month/year/leap-year boundaries), the
-  delivery policy (grace window, missed-occurrence, quiet hours), the
-  deterministic occurrence-id scheme, the minimal payload shape, the service
-  worker push handler (gate order, cross-mechanism dedup, silent
-  "not-useful-now", fallback copy, payload validation/route allowlist) and
-  the Web Push crypto (VAPID ES256 JWT verified independently, aes128gcm
-  encrypt→decrypt round-trip, malformed-key rejection).
+- **Unit** (`npm test`): 355 tests — the original 301 (dates, streaks,
+  progress, gym, notification domain, pose/coordinates) **plus 54 new** for
+  V1.6/V1.6.1: IANA timezone materialization (Kolkata, New York DST
+  transitions, spring-forward gaps, midnight/month/year/leap-year
+  boundaries), the delivery policy (grace window, missed-occurrence, quiet
+  hours), the deterministic occurrence-id scheme, the minimal payload shape,
+  the service worker push handler (gate order, cross-mechanism dedup, silent
+  "not-useful-now", fallback copy, payload validation/route allowlist), the
+  Web Push crypto (VAPID ES256 JWT verified independently, aes128gcm
+  encrypt→decrypt round-trip, malformed-key rejection) and the V1.6.1
+  capability suite (Chrome never "unsupported", iPhone Safari tab →
+  install-required, iPadOS detection, insecure/missing-API states,
+  capability-vs-readiness separation).
 - **End-to-end** (`npm run smoke`): full app journey in headless Chrome.
 - **Extended QA** (`npm run qa`): persistence, export→wipe→import round-trip,
   offline mode, mobile overflow, privacy scan.
@@ -433,8 +436,25 @@ replaced:
 - Export/import preserve notification prefs; import re-syncs the server;
   full wipe deregisters and unsubscribes the device.
 
-Quality gate (this tree): `npm test` 344/344 passing (301 pre-existing +
-43 new), server API sanity verified live (vapid-public, register, invalid
+**V1.6.1 — capability fix (same feature, corrected detection).** The
+original V1.6 feature-detected the Push API with
+`'PushManager' in ServiceWorkerRegistration.prototype` — but the prototype's
+property is the camelCase accessor `pushManager`, so the check was false in
+EVERY browser and both Chrome and iPhone were wrongly told "This browser
+doesn't support background push." Fixed by checking the actual
+registration-side accessor plus the constructor; capability (can this
+browser ever push?) is now separated from setup readiness (which step is
+next?), with these distinct states: browser unsupported / secure connection
+required / **Home Screen installation required (iOS Safari tab)** /
+permission required / service worker initializing / subscription required /
+server registration pending / server unavailable / **background reminders
+active**. A supported-but-not-enabled browser reads "Background reminders
+are ready to set up" — never "unsupported". A Settings → Notifications →
+Diagnostics row shows every observed stage per device (§29) without exposing
+any credentials.
+
+Quality gate (this tree): `npm test` 355/355 passing (301 pre-existing +
+54 new), server API sanity verified live (vapid-public, register, invalid
 rejection, status). Smoke/QA suites and real-device verification are run
 per the recipe above before calling the feature done on hardware.
 

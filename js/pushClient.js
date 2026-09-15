@@ -20,31 +20,149 @@ import { STORE } from './notifications.js';
 const PUSH_REG_ID = 'pushReg';
 const API_BASE = () => String(window.LIFE_PROGRESS_PUSH_API || '').replace(/\/+$/, '');
 
-export const PUSH_STATES = ['off', 'active', 'pending', 'denied', 'unsupported', 'insecure', 'error'];
+export const PUSH_STATES = ['off', 'active', 'pending', 'denied', 'unsupported', 'insecure', 'install-required', 'error'];
 
 // ---------------------------------------------------------------------------
-// Capability detection (§23) — honest, per-platform
+// Capability detection (§23/§30) — feature detection only, no UA sniffing.
+//
+// V1.6.1 FIX: the original check tested `'PushManager' in
+// ServiceWorkerRegistration.prototype` — but the prototype's property is the
+// camelCase instance accessor `pushManager`. There is no `PushManager` on the
+// prototype, so that test was false in EVERY browser, and Chrome + iPhone
+// were both wrongly reported as "This browser doesn't support background
+// push." The authoritative check is `registration.pushManager` (a property of
+// the actual ServiceWorkerRegistration instance); the prototype check is kept
+// only as an early, correctly-spelled signal.
 // ---------------------------------------------------------------------------
 
 export function pushCapabilities() {
   const secure = typeof window !== 'undefined' && window.isSecureContext === true;
   const swSupported = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
   const notifSupported = typeof window !== 'undefined' && 'Notification' in window;
-  const pushSupported = secure && swSupported && notifSupported &&
-    'PushManager' in window && 'PushManager' in ServiceWorkerRegistration.prototype;
+  // Push API presence: the registration-side accessor is authoritative, the
+  // prototype check is a cheap early signal, the window constructor is
+  // informative only. ANY of the first two is sufficient (§30 — standards
+  // first; Safari pre-16.4 lacks the constructor but post-16.4 standalone
+  // apps expose the accessor).
+  const protoHasPush = typeof ServiceWorkerRegistration !== 'undefined' &&
+    'pushManager' in ServiceWorkerRegistration.prototype;
+  const pushSupported = swSupported && notifSupported &&
+    protoHasPush &&
+    (typeof PushManager !== 'undefined' || protoHasPush);
+  // Standalone/installation display-mode detection (§8) — feature-based:
+  // matchMedia covers standard manifests; navigator.standalone covers iOS
+  // Home Screen web apps (Safari-only legacy flag).
   const standalone =
-    (typeof window !== 'undefined' && window.matchMedia?.('(display-mode: standalone)')?.matches) ||
+    (typeof window !== 'undefined' && (
+      window.matchMedia?.('(display-mode: standalone)')?.matches ||
+      window.matchMedia?.('(display-mode: fullscreen)')?.matches ||
+      window.matchMedia?.('(display-mode: minimal-ui)')?.matches
+    )) ||
     (typeof navigator !== 'undefined' && navigator.standalone === true);
-  return { secure, swSupported, notifSupported, pushSupported, standalone };
+  // iOS/iPadOS only delivers background Web Push to INSTALLED Home Screen
+  // web apps (16.4+). Purely diagnostic — never used to disable features.
+  // (iPadOS 13+ reports itself as desktop Safari — the MacIntel + touch
+  // points check catches that; short-circuits are ordered to stay safe when
+  // navigator is absent entirely.)
+  const ua = typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : '';
+  const ios = /iPad|iPhone|iPod/.test(ua) ||
+    (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && (navigator.maxTouchPoints | 0) > 1);
+  return { secure, swSupported, notifSupported, pushSupported, standalone, ios, protoHasPush };
 }
 
-/** Human-readable reason when background push is unavailable (§22/§33). */
-export function unsupportedReason(caps = pushCapabilities()) {
-  if (!caps.swSupported) return 'This browser has no service worker support.';
-  if (!caps.notifSupported) return 'This browser has no notification support.';
-  if (!caps.secure) return 'Background reminders need a secure (https or localhost) connection.';
-  if (!caps.pushSupported) return 'This browser doesn’t support background push.';
+/**
+ * Capability vs readiness are DIFFERENT concepts (§5):
+ *  · capability  — can THIS browser ever do background push? (static facts)
+ *  · readiness   — which setup step is the user at right now? (dynamic)
+ * A supported browser with no subscription yet must read "Ready to set up",
+ * never "unsupported".
+ */
+export function capabilityBlocker(caps = pushCapabilities()) {
+  if (!caps.swSupported) return { state: 'unsupported', reason: 'This browser has no service worker support.' };
+  if (!caps.notifSupported) return { state: 'unsupported', reason: 'This browser has no notification support.' };
+  if (!caps.secure) return { state: 'insecure', reason: 'Background reminders need a secure (https or localhost) connection.' };
+  if (!caps.pushSupported) return { state: 'unsupported', reason: 'This browser doesn’t support background push.' };
+  // iOS/iPadOS: background push requires the installed Home Screen web app.
+  if (caps.ios && !caps.standalone) {
+    return {
+      state: 'install-required',
+      reason: 'Install Life Progress on your Home Screen to enable background reminders.',
+      hint: 'In Safari, tap Share → “Add to Home Screen”, then open Life Progress from the Home Screen icon and enable reminders there.',
+    };
+  }
   return null;
+}
+
+/**
+ * Persist a capability blocker as the current push state — used by the
+ * settings toggle when enabling is blocked (e.g. iOS Safari tab) so the UI
+ * reflects the real situation on next render.
+ */
+export async function saveBlockerState(blocker) {
+  if (!blocker) return currentPushState();
+  return savePushState({ status: blocker.state, reason: blocker.reason || null, hint: blocker.hint || null });
+}
+
+/** @deprecated legacy single-boolean gate — kept for one release, now only
+ * reports TRUE capability blockers (never conflates setup readiness). */
+export function unsupportedReason(caps = pushCapabilities()) {
+  const blocker = capabilityBlocker(caps);
+  return blocker ? blocker.reason : null;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness probe (§4/§5/§29) — every setup stage observed separately, for
+// the UI and for the on-device diagnostic report. Pure observation: changes
+// nothing, prompts nothing.
+// ---------------------------------------------------------------------------
+
+export async function pushReadiness() {
+  const caps = pushCapabilities();
+  const r = {
+    secureContext: caps.secure,
+    origin: typeof location !== 'undefined' ? location.origin : null,
+    serviceWorkerApi: caps.swSupported,
+    notificationsApi: caps.notifSupported,
+    pushApi: caps.pushSupported,
+    notificationPermission: caps.notifSupported && typeof Notification !== 'undefined' ? Notification.permission : 'unavailable',
+    standalone: caps.standalone,
+    ios: caps.ios || false,
+    serviceWorker: 'unavailable',
+    serviceWorkerScope: null,
+    swActive: false, swWaiting: false, swInstalling: false,
+    pushManagerOnRegistration: false,
+    subscription: 'none',
+    serverRegistration: 'unknown',
+    vapid: 'unknown',
+    backgroundReminders: 'off',
+  };
+  if (!caps.swSupported) return r;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return r;
+    r.serviceWorker = 'registered';
+    r.serviceWorkerScope = reg.scope || null;
+    r.swActive = !!reg.active;
+    r.swWaiting = !!reg.waiting;
+    r.swInstalling = !!reg.installing;
+    r.pushManagerOnRegistration = !!reg.pushManager;
+    const sub = reg.pushManager ? await reg.pushManager.getSubscription().catch(() => null) : null;
+    r.subscription = sub ? 'active' : 'none';
+  } catch {
+    r.serviceWorker = 'error';
+  }
+  try {
+    const pushState = await currentPushState();
+    r.serverRegistration = pushState?.deviceKey && pushState?.status === 'active' ? 'registered' : pushState?.status === 'pending' ? 'pending' : 'none';
+    r.backgroundReminders = pushState?.status || 'off';
+  } catch { /* keep defaults */ }
+  try {
+    const res = await fetch(`${API_BASE()}/api/push/vapid-public`, { method: 'GET' });
+    r.vapid = res.ok ? 'reachable' : `http ${res.status}`;
+  } catch {
+    r.vapid = 'unreachable';
+  }
+  return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,10 +247,10 @@ function bufToBase64Url(buf) {
  */
 export async function subscribeAndRegister(prefs) {
   const caps = pushCapabilities();
-  const reason = unsupportedReason(caps);
-  if (reason) {
-    const state = await savePushState({ status: caps.secure ? 'unsupported' : 'insecure', reason });
-    return { ok: false, state, reason };
+  const blocker = capabilityBlocker(caps);
+  if (blocker) {
+    const state = await savePushState({ status: blocker.state, reason: blocker.reason, hint: blocker.hint || null });
+    return { ok: false, state, reason: blocker.reason };
   }
   if (Notification.permission !== 'granted') {
     const state = await savePushState({ status: 'denied', reason: 'Notification permission not granted.' });
@@ -140,8 +258,12 @@ export async function subscribeAndRegister(prefs) {
   }
 
   try {
+    // Ensure a service worker is registered AND activated before touching
+    // PushManager (§10) — navigator.serviceWorker.ready resolves only once
+    // an active worker controls (or is waiting to control) this page.
+    if (!('serviceWorker' in navigator)) throw new Error('serviceWorker unavailable');
     const reg = await navigator.serviceWorker.ready;
-    if (!reg.pushManager) throw new Error('PushManager unavailable on this registration');
+    if (!reg || !reg.pushManager) throw new Error('PushManager unavailable on this registration');
 
     const publicKey = await getVapidPublicKey();
     const applicationServerKey = urlBase64ToUint8Array(publicKey);
@@ -219,20 +341,20 @@ async function registerWithServer(deviceKey, sub, prefs, vapidPublic) {
 export async function syncPushRegistration(prefs) {
   if (!prefs.enabled) {
     const state = await currentPushState();
-    if (state.status !== 'off' && state.status !== 'unsupported' && state.status !== 'insecure') {
+    if (state.status !== 'off' && state.status !== 'unsupported' && state.status !== 'insecure' && state.status !== 'install-required') {
       await disablePush();
     }
     return { ok: true, state: await currentPushState() };
   }
-  if (Notification.permission === 'denied') {
+  if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
     return { ok: false, state: await savePushState({ status: 'denied', reason: 'Notifications are blocked in browser settings.' }) };
   }
   const caps = pushCapabilities();
-  const reason = unsupportedReason(caps);
-  if (reason) {
-    return { ok: false, state: await savePushState({ status: caps.secure ? 'unsupported' : 'insecure', reason }) };
+  const blocker = capabilityBlocker(caps);
+  if (blocker) {
+    return { ok: false, state: await savePushState({ status: blocker.state, reason: blocker.reason, hint: blocker.hint || null }) };
   }
-  if (Notification.permission !== 'granted') {
+  if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
     // Enabled but permission not yet granted — subscription happens from the
     // explicit toggle action; keep local-only until then.
     return { ok: false, state: await currentPushState() };

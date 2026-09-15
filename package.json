@@ -7,7 +7,7 @@
     "start": "node server.js",
     "icons": "node scripts/make-icons.js",
     "launch-bg": "node scripts/make-launch-bg.js",
-    "test": "node --test test/utils.test.js test/personalization.test.js test/tabbar-dock.test.js test/history.test.js test/achievements.test.js test/gym-templates.test.js test/notifications.test.js test/push-scheduling.test.js test/push-sw.test.js test/push-crypto.test.js test/pose-geometry.test.js test/pose-alignment.test.js test/pose-reference.test.js test/camera-coordinates.test.js",
+    "test": "node --test test/utils.test.js test/personalization.test.js test/tabbar-dock.test.js test/history.test.js test/achievements.test.js test/gym-templates.test.js test/notifications.test.js test/push-scheduling.test.js test/push-sw.test.js test/push-crypto.test.js test/push-capability.test.js test/pose-geometry.test.js test/pose-alignment.test.js test/pose-reference.test.js test/camera-coordinates.test.js",
     "smoke": "node scripts/smoke-test.js",
     "qa": "node scripts/qa-extended.js",
     "qa:v11": "node scripts/qa-v11.js",
