@@ -114,6 +114,7 @@ async function openDiagnosticsSheet(host) {
     const box = ui.el('div', { class: 'settings-group', style: { marginTop: '8px' } });
     box.innerHTML = [
       line('Secure connection (https / localhost)', r.secureContext),
+      line('Frontend origin', r.origin),
       line('Service worker support', r.serviceWorkerApi),
       line('Notifications support', r.notificationsApi),
       line('Background push support', r.pushApi),

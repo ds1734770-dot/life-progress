@@ -391,16 +391,35 @@ node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
   API URL, the raw HTTP status and a plain-language diagnosis (including
   "backend is not deployed here — static hosting") when it detects that
   signature.
+
+### Persistence requirements (read before deploying)
+
+The backend persists subscriptions and the delivery-dedup ledger in ONE JSON
+file — `PUSH_DATA_FILE` (default `.push-data.json`, git-ignored), written
+atomically. This is deliberate (tiny state, zero-dependency), but it means:
+
+- **The host must provide a persistent volume.** On platforms with an
+  **ephemeral filesystem** (many free tiers wipe non-mounted paths on every
+  deploy/restart), an unmounted `PUSH_DATA_FILE` would lose subscriptions and
+  the dedup ledger on restart — devices would need to re-enable reminders and
+  restart-safe dedup would reset. Mount a persistent disk or set
+  `PUSH_DATA_FILE` to a path on one.
+- **VAPID keys must be stable.** Set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`
+  / `VAPID_SUBJECT` as environment variables in production (env vars take
+  precedence over the generated `.vapid-keys.json` file). If a host regenerates
+  the keypair, every existing browser subscription becomes invalid.
+- `GET /health` returns `{ ok: true, … }` — use it to verify the deployed
+  backend is alive. It exposes no keys and no subscription data.
 - State survives restarts in `PUSH_DATA_FILE`; the first tick after startup
   only handles occurrences inside the grace window (no stale flood).
 - After deploying an update, bump the service worker cache version in `sw.js`
-  (`life-progress-v1.12`).
+  (`life-progress-v1.14`).
 
 ## Testing
 
-- **Unit** (`npm test`): 355 tests — the original 301 (dates, streaks,
-  progress, gym, notification domain, pose/coordinates) **plus 54 new** for
-  V1.6/V1.6.1: IANA timezone materialization (Kolkata, New York DST
+- **Unit** (`npm test`): 377 tests — the original 301 (dates, streaks,
+  progress, gym, notification domain, pose/coordinates) plus V1.6/V1.6.1/V1.6.2
+  coverage: IANA timezone materialization (Kolkata, New York DST
   transitions, spring-forward gaps, midnight/month/year/leap-year
   boundaries), the delivery policy (grace window, missed-occurrence, quiet
   hours), the deterministic occurrence-id scheme, the minimal payload shape,
@@ -410,7 +429,9 @@ node server.js          # or PUSH_WORKER_ONLY=1 for scheduler-only
   encrypt→decrypt round-trip, malformed-key rejection) and the V1.6.1
   capability suite (Chrome never "unsupported", iPhone Safari tab →
   install-required, iPadOS detection, insecure/missing-API states,
-  capability-vs-readiness separation).
+  capability-vs-readiness separation) and the deployment suite (/health,
+  PORT handling, VAPID env precedence, split-deployment CORS, static-host
+  diagnosis regression).
 - **End-to-end** (`npm run smoke`): full app journey in headless Chrome.
 - **Extended QA** (`npm run qa`): persistence, export→wipe→import round-trip,
   offline mode, mobile overflow, privacy scan.

@@ -23,7 +23,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handlePushApi } from './server/api.js';
-import { loadState } from './server/store.js';
+import { loadState, dataFilePath } from './server/store.js';
 import { getVapidConfig } from './server/vapid.js';
 import { runScheduler, schedulerTick } from './server/scheduler.js';
 
@@ -51,6 +51,14 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     let pathname = decodeURIComponent(url.pathname);
+
+    // Health probe (§6): safe operational info only — never secrets, never
+    // subscription data. Used to verify a deployed backend is alive.
+    if (req.method === 'GET' && pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true, service: 'life-progress-push', time: new Date().toISOString() }));
+      return;
+    }
 
     // V1.6 — notification backend (mounted before static files).
     if (await handlePushApi(req, res, pathname)) return;
@@ -97,6 +105,7 @@ function logVapidInfo(config) {
 const state = await loadState();
 const vapid = await getVapidConfig();
 logVapidInfo(vapid);
+console.log(`[push] state file: ${dataFilePath()} — must live on a PERSISTENT volume in production (ephemeral filesystems lose subscriptions + dedup ledger on restart, see README § Persistence)`);
 
 if (process.env.PUSH_WORKER_ONLY) {
   // Standalone scheduler (§18): no static files, just the delivery loop.
