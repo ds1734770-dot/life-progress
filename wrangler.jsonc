@@ -10,9 +10,14 @@
 // every-minute Cron Trigger. No KV, no R2, no Queues, no paid services.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "life-progress-push",
+  "name": "life-progress",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-08-01",
+
+  // Deployment surface (explicit): workers.dev subdomain enabled, preview
+  // URLs off. Workers Builds matches this name in CI.
+  "workers_dev": true,
+  "preview_urls": false,
 
   // Non-secret configuration (override at deploy time if needed).
   // Secrets (VAPID_*) are set via `wrangler secret put` — never here.
