@@ -16,6 +16,8 @@ const crypto = globalThis.crypto;
 
 const encoder = new TextEncoder();
 const P256_PUB_LEN = 65; // 0x04 || X(32) || Y(32)
+const SALT_LEN = 16; // RFC 8188 §2.1: fresh random salt per message
+const RECORD_SIZE = 4096; // rs — fits any reminder payload in one record
 
 // ---------------------------------------------------------------------------
 // Base64url helpers — plain WebCrypto-era primitives (no Buffer)
@@ -111,12 +113,26 @@ async function hkdf(ikm, salt, info, lengthBytes) {
 /**
  * Encrypt `payload` (string or bytes) for one push subscription.
  * Returns the aes128gcm binary body (Uint8Array) to POST to the endpoint.
+ *
+ * RFC 8291 §2/§3: the application server generates an EPHEMERAL ECDH keypair
+ * AND A FRESH RANDOM SALT for every message. The ephemeral public key goes in
+ * the aes128gcm "keyid" header parameter (RFC 8188 §2.1); the salt goes in
+ * the "salt" parameter. The header layout is therefore:
+ *
+ *   salt(16) || rs(4, big-endian) || idlen(1 = 65) || keyid(as_public 65)
+ *
+ * followed by exactly ONE record: AES-128-GCM over plaintext || 0x02
+ * (final-record delimiter). The single record uses sequence number 0, so the
+ * derived nonce needs no XOR adjustment (RFC 8188 §2.3).
  */
 export async function encryptPayload(payload, subscription) {
   const uaPublic = b64uDecode(subscription.keys.p256dh);
   const authSecret = b64uDecode(subscription.keys.auth);
+  if (authSecret.length !== 16) {
+    throw new Error('invalid auth secret: expected 16 bytes');
+  }
 
-  // Ephemeral sender keypair (fresh per message, as required).
+  // Ephemeral sender (application-server) keypair — fresh per message (§3.1).
   const sender = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
   const senderPublic = new Uint8Array(await crypto.subtle.exportKey('raw', sender.publicKey));
   const receiverPublic = await importEcdhPublic(uaPublic);
@@ -124,19 +140,23 @@ export async function encryptPayload(payload, subscription) {
     await crypto.subtle.deriveBits({ name: 'ECDH', public: receiverPublic }, sender.privateKey, 256)
   );
 
-  // ikm = HKDF(salt=auth, ikm=ecdh, info="WebPush: info\0" || uaPub || asPub, 32)
+  // RFC 8291 §3.3: IKM = HKDF(ikm=ecdh_secret, salt=auth_secret,
+  //   info="WebPush: info\0" || uaPublic || asPublic, 32)
   const info = new Uint8Array(14 + uaPublic.length + senderPublic.length);
   info.set(encoder.encode('WebPush: info\0'), 0);
   info.set(uaPublic, 14);
   info.set(senderPublic, 14 + uaPublic.length);
   const ikm = await hkdf(ecdhSecret, authSecret, info, 32);
 
-  // Per aes128gcm: salt = sender public key.
-  const cek = await hkdf(ikm, senderPublic, encoder.encode('Content-Encoding: aes128gcm\0'), 16);
-  const nonce = await hkdf(ikm, senderPublic, encoder.encode('Content-Encoding: nonce\0'), 12);
+  // RFC 8188 §2.2/§2.3 with the WebPush IKM: the SALT parameter — a fresh
+  // random 16-byte value per message — is the HKDF salt for CEK and nonce.
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const cek = await hkdf(ikm, salt, encoder.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(ikm, salt, encoder.encode('Content-Encoding: nonce\0'), 12);
 
-  // Record = plaintext || 0x02 delimiter (no further padding; single record).
-  const plaintext = typeof payload === 'string' ? encoder.encode(payload) : payload;
+  // Record = plaintext || 0x02 delimiter (single record, SEQ = 0).
+  const plaintext = typeof payload === 'string' ? encoder.encode(payload) : toByteView(payload);
+  if (plaintext.length > RECORD_SIZE - 17) throw new Error('payload too large for a single aes128gcm record');
   const record = new Uint8Array(plaintext.length + 1);
   record.set(plaintext, 0);
   record[plaintext.length] = 0x02;
@@ -146,14 +166,12 @@ export async function encryptPayload(payload, subscription) {
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: new Uint8Array(0), tagLength: 128 }, key, record)
   );
 
-  // Header: sender public key (65) || rs (4 BE, 4096) || idlen (1, 0).
-  const rs = 4096;
-  if (ciphertext.length > rs - 17) throw new Error('payload too large for a single aes128gcm record');
-  const header = new Uint8Array(P256_PUB_LEN + 4 + 1);
-  header.set(senderPublic, 0);
-  const dv = new DataView(header.buffer);
-  dv.setUint32(P256_PUB_LEN, rs);
-  dv.setUint8(P256_PUB_LEN + 4, 0); // no key id
+  // RFC 8188 §2.1 header: salt(16) || rs(4 BE) || idlen(1 = 65) || keyid(65).
+  const header = new Uint8Array(SALT_LEN + 4 + 1 + P256_PUB_LEN);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(SALT_LEN, RECORD_SIZE);
+  header[SALT_LEN + 4] = P256_PUB_LEN;
+  header.set(senderPublic, SALT_LEN + 5);
 
   const body = new Uint8Array(header.length + ciphertext.length);
   body.set(header, 0);
@@ -162,9 +180,10 @@ export async function encryptPayload(payload, subscription) {
 }
 
 /**
- * Decrypt side — implemented ONLY for tests, mirroring RFC 8291 §5.1 exactly,
- * so the test suite can prove the encryption is interoperable with what a
- * browser push service expects (encrypt → decrypt round-trip).
+ * Decrypt side — implemented ONLY for tests. Parses the REAL aes128gcm wire
+ * format (RFC 8188 §2.1) and re-derives the RFC 8291 §3.3 receiver keys from
+ * the parsed salt + keyid, so the test suite proves the produced body is what
+ * a browser push client would actually receive.
  *
  * @param {Uint8Array} body               aes128gcm body produced by encryptPayload
  * @param {{publicKey: Uint8Array, privateKey: CryptoKey}} receiver  the client-side keypair
@@ -172,27 +191,32 @@ export async function encryptPayload(payload, subscription) {
  * @param {Uint8Array} authSecret         the client's auth secret
  */
 export async function decryptPayload(body, receiver, authSecret) {
-  const senderPublic = body.slice(0, P256_PUB_LEN);
-  const idlen = body[69];
-  const ciphertext = body.slice(70 + idlen);
+  if (body.length < 21) throw new Error('aes128gcm body too short');
+  const salt = body.slice(0, SALT_LEN);
+  const rs = ((body[16] << 24) | (body[17] << 16) | (body[18] << 8) | body[19]) >>> 0;
+  const idlen = body[20];
+  if (idlen !== P256_PUB_LEN) throw new Error('aes128gcm: expected 65-byte keyid (WebPush as_public)');
+  if (rs < 18) throw new Error('aes128gcm: invalid record size');
+  const senderPublic = body.slice(21, 21 + idlen);
+  const ciphertext = body.slice(21 + idlen);
 
   const senderPub = await importEcdhPublic(senderPublic);
   const ecdhSecret = new Uint8Array(
     await crypto.subtle.deriveBits({ name: 'ECDH', public: senderPub }, receiver.privateKey, 256)
   );
-  // RFC 8291 §5.1: info = "WebPush: info" || 0x00 || receiver_pub || sender_pub
+  // RFC 8291 §3.3: info = "WebPush: info" || 0x00 || receiver_pub || sender_pub
   const info = new Uint8Array(14 + receiver.publicKey.length + senderPublic.length);
   info.set(encoder.encode('WebPush: info\0'), 0);
   info.set(receiver.publicKey, 14);
   info.set(senderPublic, 14 + receiver.publicKey.length);
   const ikm = await hkdf(ecdhSecret, authSecret, info, 32);
-  const cek = await hkdf(ikm, senderPublic, encoder.encode('Content-Encoding: aes128gcm\0'), 16);
-  const nonce = await hkdf(ikm, senderPublic, encoder.encode('Content-Encoding: nonce\0'), 12);
+  const cek = await hkdf(ikm, salt, encoder.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(ikm, salt, encoder.encode('Content-Encoding: nonce\0'), 12);
   const key = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['decrypt']);
   const record = new Uint8Array(
     await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce, additionalData: new Uint8Array(0), tagLength: 128 }, key, ciphertext)
   );
-  if (record[record.length - 1] !== 0x02) throw new Error('bad padding delimiter');
+  if (record.length < 1 || record[record.length - 1] !== 0x02) throw new Error('bad padding delimiter');
   return record.slice(0, -1);
 }
 
