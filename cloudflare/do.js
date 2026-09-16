@@ -14,6 +14,11 @@
  * Sharding per device would only add request fan-out for zero benefit at
  * this scale. Documented reasoning rather than a silent choice.
  *
+ * SCHEDULING TRIGGER (V1.6.4): a self-rescheduling Durable Object alarm on
+ * this single instance (~1/min). Cloudflare Cron dispatch was empirically
+ * non-functional in this deployment; see the alarm block below. There is
+ * exactly ONE alarm for the ONE global instance — never one per device.
+ *
  * STORAGE: Durable Object SQLite (via the `new_sqlite_classes` migration).
  * The Node backend's .push-data.json / .vapid-keys.json files are Node-host
  * deployment artifacts and are NEVER used here (§3). Schema init is
@@ -27,8 +32,25 @@
 import { computeNextOccurrences, decideOccurrence, buildPushPayload, ROUTES } from '../server/push/domain.js';
 import { sendPushMessage } from '../server/push/webpush.js';
 
+/**
+ * Alarm cadence (V1.6.4). Production scheduling is driven by a
+ * SELF-RESCHEDULING Durable Object alarm, not the Cron Trigger: Cloudflare
+ * Cron dispatch was empirically non-functional in this deployment (schedule
+ * registered, valid `scheduled()` handler, yet ZERO scheduled invocations
+ * over hours per Cloudflare's own `workersInvocationsScheduled` analytics —
+ * 2026-09-16 investigation). The scheduling DOMAIN below (occurrences,
+ * eligibility, quiet hours, atomic claims, dedup) is unchanged — only the
+ * trigger mechanism differs.
+ */
+const TICK_MS = 60 * 1000; // target: ~one tick per minute
+const ALARM_SAFETY_MS = 5 * 1000; // land a few seconds after the minute boundary
+
 /** SQL schema — idempotent, safe on a non-empty database (§4). */
 export const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS scheduler_state (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   device_key TEXT PRIMARY KEY,
   endpoint   TEXT NOT NULL,
@@ -94,8 +116,17 @@ export class LPPushDO {
     this.state = state;
     this.env = env;
     this.sendPushMessage = deps.sendPushMessage || sendPushMessage;
+    // Test-only injected clock (§27): production uses the real instant at
+    // every wake; tests pin `now` so nothing depends on wall-clock time.
+    this.now = deps.now || (() => Date.now());
     this.sql = adaptWorkerSql(state.storage.sql);
     this.sql.exec(SCHEMA_SQL); // idempotent (IF NOT EXISTS)
+    // Startup recovery (§6): after a deploy, eviction or crash the DO may
+    // be re-constructed with devices registered but NO alarm booked. Arm it
+    // here so existing subscriptions are scheduled again without waiting
+    // for a fresh register() call. Idempotent: #ensureAlarm keeps any
+    // earlier-or-equal existing alarm.
+    try { this.#ensureAlarm(); } catch { /* never block construction */ }
   }
 
   // -------------------------------------------------------------------------
@@ -158,6 +189,9 @@ export class LPPushDO {
       JSON.stringify(v.times), JSON.stringify(v.categories),
       v.quietStart, v.quietEnd, v.enabled ? 1 : 0, now, now
     );
+    // Bootstrap (§6): a registration is proof that scheduling matters.
+    // If no alarm exists (fresh deploy, previously idle DO), arm one.
+    this.#ensureAlarm(now);
     return { ok: true, deviceKey: v.deviceKey, serverTime: now };
   }
 
@@ -165,6 +199,9 @@ export class LPPushDO {
     if (typeof deviceKey === 'string' && deviceKey) {
       this.sql.exec('DELETE FROM push_subscriptions WHERE device_key = ?', deviceKey);
     }
+    // Idle shutdown: with zero devices there is nothing to schedule — stop
+    // burning alarm cycles. A later register() re-arms (see register).
+    this.#idleAlarmIfEmpty();
     return { ok: true };
   }
 
@@ -174,10 +211,23 @@ export class LPPushDO {
     for (const row of this.sql.exec(
       'SELECT status, COUNT(*) AS n FROM notification_occurrences GROUP BY status'
     ).rows) counts[row.status] = row.n;
+    const storage = this.state && this.state.storage;
+    const nextAlarmAt = storage && typeof storage.getAlarm === 'function'
+      ? storage.getAlarm()
+      : null;
+    const stateRow = (k) => this.sql.exec('SELECT value FROM scheduler_state WHERE key = ?', k).one();
     return {
       ok: true,
       devices: subs.length,
       active: subs.filter((s) => s.enabled !== 0 && !s.disabled).length,
+      // Alarm-scheduler observability (§11): timestamps only — no secrets,
+      // no endpoints, no device identifiers beyond the existing deviceKey.
+      scheduler: {
+        trigger: 'durable-object-alarm',
+        nextAlarmAt,
+        lastTickAt: (stateRow('lastTickAt') || {}).value || null,
+        lastTickResult: (() => { try { return JSON.parse((stateRow('lastTickResult') || {}).value || 'null'); } catch { return null; } })(),
+      },
       occurrences: counts,
       nextDeliveries: subs.slice(0, 20).map((s) => ({
         deviceKey: s.device_key,
@@ -212,11 +262,80 @@ export class LPPushDO {
   }
 
   // -------------------------------------------------------------------------
-  // Scheduler tick — invoked by the Cron Trigger via the stateless Worker.
-  // `nowMs` is injectable so tests run the REAL tick logic on a fixed clock.
+  // Alarm — the production scheduler trigger (V1.6.4). At-least-once by
+  // platform contract: idempotency comes from the occurrence-id PRIMARY KEY
+  // claim inside tick(), so retries can never double-send (§14).
   // -------------------------------------------------------------------------
 
-  async tick(nowMs = Date.now()) {
+  /** Storage facade for alarms; null-safe so pure-SQLite test harnesses
+   * that model only `storage.sql` simply never arm an alarm. */
+  #alarmStore() {
+    const s = this.state && this.state.storage;
+    return s && typeof s.setAlarm === 'function' ? s : null;
+  }
+
+  #nextTickFrom(nowMs) {
+    // Absolute UTC timestamp (§3) — never the isolate's local timezone.
+    // Base: just after the NEXT minute boundary. If that instant is already
+    // in the past (delayed wake, clock drift), push one further minute out —
+    // never book a wake that would fire immediately in a tight loop.
+    const floor = Math.floor(nowMs / TICK_MS) * TICK_MS;
+    let candidate = floor + TICK_MS + ALARM_SAFETY_MS;
+    if (candidate <= nowMs) candidate += TICK_MS;
+    return candidate;
+  }
+
+  /** Arm the next alarm unless an earlier one is already booked. */
+  #armAlarm(atMs, { force = false } = {}) {
+    const store = this.#alarmStore();
+    if (!store) return null;
+    if (!force) {
+      const current = typeof store.getAlarm === 'function' ? store.getAlarm() : null;
+      if (current !== null && current <= atMs) return current; // earlier wake wins
+    }
+    store.setAlarm(atMs);
+    return atMs;
+  }
+
+  /** Bootstrap: guarantee an alarm while any device is registered (§6). */
+  #ensureAlarm(nowMs = this.now()) {
+    return this.#armAlarm(this.#nextTickFrom(nowMs));
+  }
+
+  /** With no devices left, cancel the alarm (nothing to schedule). */
+  #idleAlarmIfEmpty(nowMs = this.now()) {
+    const row = this.sql.exec('SELECT COUNT(*) AS n FROM push_subscriptions').one();
+    if (row && row.n) return false;
+    const store = this.#alarmStore();
+    if (store && typeof store.deleteAlarm === 'function') store.deleteAlarm();
+    return true;
+  }
+
+  async alarm() {
+    // The ACTUAL instant of this wake (§3) — alarms can run late, so every
+    // downstream wall-clock calculation derives from `now`, never from the
+    // intended alarm time.
+    const now = this.now();
+    const idle = this.#idleAlarmIfEmpty(now);
+    // Re-arm BEFORE ticking (§5): even if tick() throws, the next cycle is
+    // already booked — a transient failure can never permanently stop
+    // scheduling. Duplicate/early wakes remain harmless because the
+    // occurrence-id claim is the single delivery authority (§14).
+    const next = idle ? null : this.#nextTickFrom(now);
+    if (next !== null) this.#armAlarm(next, { force: true });
+    const result = await this.tick(now);
+    // Safe diagnostics (§11): UTC instants and counters only.
+    console.log(`[lp-push-do] alarm: utc=${new Date(now).toISOString()} devices=${result.devices ?? '-'} deliveries=${result.deliveries ?? '-'} skips=${result.skips ?? '-'} next=${next ? new Date(next).toISOString() : 'idle'}`);
+    return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // Scheduler tick — shared by the alarm AND (historically) the Cron Trigger
+  // via the stateless Worker. `nowMs` is injectable so tests run the REAL
+  // tick logic on a fixed clock. The delivery policy below is UNCHANGED.
+  // -------------------------------------------------------------------------
+
+  async tick(nowMs = this.now()) {
     const vapid = this.#vapid();
     if (!vapid) return { ok: false, error: 'VAPID not configured' };
     const subs = this.#listSubs().filter((s) => s.enabled !== 0 && !s.disabled);
@@ -258,6 +377,19 @@ export class LPPushDO {
         }
       }
     }
+    // Heartbeat (§11): lets /status distinguish "cron/alarm never fired"
+    // from "fired but found nothing due" — the exact blind spot of the
+    // 2026-09-16 cron investigation.
+    this.sql.exec(
+      `INSERT INTO scheduler_state (key, value) VALUES ('lastTickAt', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      String(nowMs)
+    );
+    this.sql.exec(
+      `INSERT INTO scheduler_state (key, value) VALUES ('lastTickResult', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      JSON.stringify({ devices: subs.length, deliveries, skips })
+    );
     return { ok: true, devices: subs.length, deliveries, skips };
   }
 

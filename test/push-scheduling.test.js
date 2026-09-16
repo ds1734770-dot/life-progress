@@ -214,3 +214,51 @@ test('buildPushPayload: contains only category identity, route and timestamps', 
   // Privacy: no journal text, no names, no amounts.
   assert.doesNotMatch(flat, /journal|mood|note|ml|target/i);
 });
+
+// ---------------------------------------------------------------------------
+// V1.6.4 regression — sub-minute anchors must not shift the occurrence.
+// zoneOffsetMinutes once paired the seconds-truncated wall clock with the
+// RAW epoch, so anchors with second ≥ 30 rounded the IST offset down by one
+// minute and pushed "today"'s occurrence a full minute into the future
+// (a tick at :31 saw the 19:54 IST reminder as "due at 19:55"). Alarms can
+// fire at any second, so the scheduler must be second-independent.
+// ---------------------------------------------------------------------------
+
+test('regression: occurrence instant is identical for anchors at :05 and :31', () => {
+  const sub = device(); // water at 12:00 IST
+  const a5 = computeNextOccurrences(sub, Date.UTC(2026, 0, 15, 6, 30, 5));
+  const a31 = computeNextOccurrences(sub, Date.UTC(2026, 0, 15, 6, 30, 31));
+  const a59 = computeNextOccurrences(sub, Date.UTC(2026, 0, 15, 6, 30, 59));
+  for (const [label, occs] of [[':05', a5], [':31', a31], [':59', a59]]) {
+    const water = occs.find((o) => o.category === 'water');
+    assert.ok(water, `anchor ${label} still computes the water occurrence`);
+    assert.equal(water.epochMs, Date.UTC(2026, 0, 15, 6, 30, 0), `anchor ${label}: 12:00 IST = 06:30:00Z exactly`);
+    assert.equal(water.dateKey, '2026-01-15');
+  }
+  // And the due decision is stable across the same second-of-minute sweep.
+  assert.equal(decideOccurrence(sub, a5.find((o) => o.category === 'water'), Date.UTC(2026, 0, 15, 6, 30, 5)).action, 'deliver');
+  assert.equal(decideOccurrence(sub, a31.find((o) => o.category === 'water'), Date.UTC(2026, 0, 15, 6, 30, 31)).action, 'deliver');
+  assert.equal(decideOccurrence(sub, a59.find((o) => o.category === 'water'), Date.UTC(2026, 0, 15, 6, 30, 59)).action, 'deliver');
+});
+
+test('regression: every IST reminder time maps to the same UTC minute regardless of anchor seconds', () => {
+  const tz = 'Asia/Kolkata';
+  const times = [[0, 5], [7, 54], [12, 0], [19, 54], [23, 59]]; // (hh, mm) IST
+  for (const [hh, mm] of times) {
+    const at5 = zonedTimeToEpoch(Date.UTC(2026, 0, 15, 6, 30, 5), tz, hh, mm);
+    const at31 = zonedTimeToEpoch(Date.UTC(2026, 0, 15, 6, 30, 31), tz, hh, mm);
+    const at59 = zonedTimeToEpoch(Date.UTC(2026, 0, 15, 6, 30, 59), tz, hh, mm);
+    assert.equal(at5, at31);
+    assert.equal(at31, at59);
+    // 19:54 IST = 14:24 UTC — the canonical example from the V1.6.4 spec.
+    if (hh === 19 && mm === 54) assert.equal(at5, Date.UTC(2026, 0, 15, 14, 24, 0));
+    if (hh === 7 && mm === 54) assert.equal(at5, Date.UTC(2026, 0, 15, 2, 24, 0));
+    // The resolved instant must land exactly on the wall-clock minute.
+    const parts = zonedParts(at5, tz);
+    assert.equal(parts.hour, hh);
+    assert.equal(parts.minute, mm);
+    // Zero seconds is the essence of the fix: the occurrence instant sits on
+    // the minute boundary, never smeared by the anchor's sub-minute residue.
+    assert.equal(at5 % 60000, 0);
+  }
+});

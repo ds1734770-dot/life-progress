@@ -22,6 +22,10 @@ import { adaptWorkerSql } from '../cloudflare/do.js';
  * ...params)` returns a cursor with `.toArray()`; constraint violations
  * throw like workerd's UNIQUE errors. `adaptWorkerSql` from do.js wraps
  * THIS layer — exactly as the Workers runtime does in production.
+ *
+ * The alarm APIs (getAlarm/setAlarm/deleteAlarm) are modeled on the same
+ * semantics workerd provides — exactly-once booked wake, cancellable —
+ * so the DO's alarm scheduling logic is exercised like production.
  */
 function makeState() {
   const db = new DatabaseSync(':memory:');
@@ -44,7 +48,17 @@ function makeState() {
       return { toArray: () => [] };
     },
   };
-  return { storage: { sql: raw } };
+  // Alarm bookkeeping: mirrors workerd (a single booked wake timestamp in
+  // ms, or null when no alarm is set).
+  let alarmAt = null;
+  const storage = {
+    sql: raw,
+    getAlarm: () => alarmAt,
+    setAlarm: (t) => { alarmAt = t; },
+    deleteAlarm: () => { alarmAt = null; },
+  };
+  storage.alarmAt = () => alarmAt; // test introspection
+  return { storage };
 }
 
 const VAPID_ENV = {
@@ -84,9 +98,10 @@ function sender() {
   return fn;
 }
 
-function makeDO(env = VAPID_ENV, send = sender()) {
-  const doInstance = new LPPushDO(makeState(), env, { sendPushMessage: send });
-  return { doInstance, send };
+function makeDO(env = VAPID_ENV, send = sender(), deps = {}) {
+  const state = makeState();
+  const doInstance = new LPPushDO(state, env, { sendPushMessage: send, ...deps });
+  return { doInstance, send, state };
 }
 
 // ---------------------------------------------------------------------------
@@ -409,4 +424,227 @@ test('DO stores only delivery metadata (no journal/goals/water/photos fields)', 
   for (const forbidden of ['journal_text', 'goal_title', 'photo', 'amount_ml', 'note']) {
     assert.ok(!serialized.includes(forbidden), `must not contain ${forbidden}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Alarm scheduler (V1.6.4) — deterministic, fixed UTC timestamps (§9)
+// The DO's alarm() is the production trigger for the SAME tick(); every
+// test below pins the clock via deps.now so nothing depends on wall time.
+// ---------------------------------------------------------------------------
+
+/** A DO whose clock returns `start`, advanced manually via time.advance. */
+function makeTimedDO(start, overrides = {}) {
+  let now = start;
+  const time = {
+    get now() { return now; },
+    advance(ms) { now += ms; },
+    set(t) { now = t; },
+  };
+  const { doInstance, send, state } = makeDO(VAPID_ENV, sender(), { ...overrides, now: () => now });
+  return { doInstance, send, state, time };
+}
+
+function fireAlarm({ doInstance, time }) {
+  // workerd contract: alarm() fires when the booked time arrives; the
+  // handler derives the ACTUAL instant from the clock, never the booking.
+  return doInstance.alarm();
+}
+
+test('alarm: registration bootstraps the alarm (next minute boundary + 5 s)', async () => {
+  const { doInstance, state, time } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 37)); // 19:54:37 IST
+  await doInstance.register(reg());
+  const booked = state.storage.alarmAt();
+  assert.ok(booked !== null, 'register must arm the alarm');
+  assert.equal(booked, Date.UTC(2026, 8, 16, 14, 25, 5), 'next minute boundary + 5 s safety');
+  assert.ok(booked > time.now, 'booked wake must be in the future');
+});
+
+test('alarm: constructor recovery re-arms after restart with devices but no alarm', async () => {
+  const start = Date.UTC(2026, 8, 16, 14, 24, 37);
+  const { doInstance, state } = makeTimedDO(start);
+  await doInstance.register(reg());
+  assert.ok(state.storage.alarmAt() !== null, 'register armed the alarm');
+  // Simulate a fresh isolate: same storage, alarm lost, DO re-constructed.
+  state.storage.deleteAlarm();
+  assert.equal(state.storage.alarmAt(), null);
+  new LPPushDO(state, VAPID_ENV, { sendPushMessage: sender(), now: () => start });
+  assert.equal(state.storage.alarmAt(), Date.UTC(2026, 8, 16, 14, 25, 5), 'startup recovery re-armed the alarm');
+});
+
+test('alarm: fires → invokes tick() → reschedules next minute (self-sustaining chain)', async () => {
+  const { doInstance, send, state, time } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 23, 40));
+  await doInstance.register(reg());
+  const firstWake = state.storage.alarmAt();
+  assert.equal(firstWake, Date.UTC(2026, 8, 16, 14, 24, 5));
+  time.set(firstWake); // workerd fires the alarm at the booked instant
+  await fireAlarm({ doInstance, time });
+  assert.equal(send.calls.length, 0, 'nothing due yet at 20:24 IST vs 12:00 water');
+  const next = state.storage.alarmAt();
+  assert.equal(next, Date.UTC(2026, 8, 16, 14, 25, 5), 'next alarm booked for the next minute');
+});
+
+test('alarm: delivers an Asia/Kolkata reminder due at wake time (14:24Z → 19:54 IST)', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 4));
+  await doInstance.register(reg({ times: { water: '19:54', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  const wake = Date.UTC(2026, 8, 16, 14, 24, 5); // 19:54:05 IST — within grace
+  state.storage.setAlarm(wake);
+  doInstance.now = () => wake;
+  await doInstance.alarm();
+  const water = send.calls.find((c) => c.payload.category === 'water');
+  assert.ok(water, 'reminder due at 19:54 IST must be delivered by the alarm path');
+  assert.equal(water.payload.occurrenceId, 'testdevice000001:water:2026-09-16');
+  assert.equal(water.payload.dateKey, '2026-09-16');
+  assert.equal(state.storage.alarmAt(), Date.UTC(2026, 8, 16, 14, 25, 5), 'chain continues after delivery');
+});
+
+test('alarm: IST conversion — 02:24 UTC wake covers 07:54 IST reminder', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 2, 24, 4));
+  await doInstance.register(reg({ times: { water: '07:54', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  const wake = Date.UTC(2026, 8, 16, 2, 24, 5); // 07:54:05 IST
+  state.storage.setAlarm(wake);
+  doInstance.now = () => wake;
+  await doInstance.alarm();
+  const water = send.calls.find((c) => c.payload.category === 'water');
+  assert.ok(water, '07:54 IST reminder due at 02:24 UTC');
+  assert.equal(water.payload.dateKey, '2026-09-16');
+});
+
+test('alarm: repeated/duplicate wakes never duplicate a send (at-least-once safety)', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 4));
+  await doInstance.register(reg({ times: { water: '19:54', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  const wake = Date.UTC(2026, 8, 16, 14, 24, 5);
+  doInstance.now = () => wake;
+  state.storage.setAlarm(wake);
+  await doInstance.alarm();
+  await doInstance.alarm(); // retried/duplicate wake at the same instant
+  await doInstance.alarm(); // and again
+  const water = send.calls.filter((c) => c.payload.category === 'water');
+  assert.equal(water.length, 1, 'occurrence-id claim is the single send authority');
+});
+
+test('alarm: tick() throwing does not kill the chain (next alarm already booked)', async () => {
+  const { doInstance, state, time } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 5));
+  await doInstance.register(reg());
+  // Break tick() AFTER registration (simulates a transient storage error).
+  const boom = () => { throw new Error('transient storage failure'); };
+  const original = doInstance.tick.bind(doInstance);
+  doInstance.tick = boom;
+  const wake = Date.UTC(2026, 8, 16, 14, 25, 5);
+  doInstance.now = () => wake;
+  state.storage.setAlarm(wake);
+  await assert.rejects(() => doInstance.alarm(), /transient storage failure/);
+  assert.equal(state.storage.alarmAt(), Date.UTC(2026, 8, 16, 14, 26, 5), 'next cycle booked BEFORE tick ran');
+  // Repair: the chain continues from where it left off.
+  doInstance.tick = original;
+  time.set(Date.UTC(2026, 8, 16, 14, 26, 5));
+  doInstance.now = () => Date.UTC(2026, 8, 16, 14, 26, 5);
+  await doInstance.alarm();
+  assert.equal(state.storage.alarmAt(), Date.UTC(2026, 8, 16, 14, 27, 5), 'scheduling survived the failure');
+});
+
+test('alarm: zero devices → alarm cancels itself (idle shutdown)', async () => {
+  const { doInstance, state } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 5));
+  await doInstance.register(reg());
+  assert.ok(state.storage.alarmAt() !== null);
+  await doInstance.unregister({ deviceKey: 'testdevice000001' });
+  assert.equal(state.storage.alarmAt(), null, 'no devices → no alarm cycles burned');
+  // A later wake (if any) shuts down cleanly instead of looping.
+  doInstance.now = () => Date.UTC(2026, 8, 16, 14, 25, 5);
+  state.storage.setAlarm(Date.UTC(2026, 8, 16, 14, 25, 5));
+  await doInstance.alarm();
+  assert.equal(state.storage.alarmAt(), null, 'idle wake does not re-arm');
+  // Re-registration re-arms (no permanent race — §6).
+  await doInstance.register(reg());
+  assert.ok(state.storage.alarmAt() !== null, 'register re-establishes the alarm');
+});
+
+test('alarm: unbooked alarm + tick via legacy path still delivers (worker /tick parity)', async () => {
+  const { doInstance, send } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 30));
+  await doInstance.register(reg({ times: { water: '19:54', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  const r = await doInstance.tick(Date.UTC(2026, 8, 16, 14, 24, 31));
+  assert.equal(r.deliveries, 1);
+  assert.equal(send.calls[0].payload.category, 'water');
+});
+
+test('alarm: heartbeat recorded → /status exposes scheduler observability', async () => {
+  const { doInstance, state } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 5));
+  await doInstance.register(reg());
+  const before = await doInstance.status();
+  assert.equal(before.ok, true);
+  assert.equal(before.scheduler.trigger, 'durable-object-alarm');
+  assert.equal(before.scheduler.lastTickAt, null, 'no tick has run yet');
+  const wake = Date.UTC(2026, 8, 16, 14, 25, 5);
+  doInstance.now = () => wake;
+  state.storage.setAlarm(wake);
+  await doInstance.alarm();
+  const after = await doInstance.status();
+  assert.equal(after.scheduler.lastTickAt, String(wake));
+  // skips counts missed-after-grace claims: water 12:00 IST (06:30Z),
+  // goals 08:00 IST (02:30Z), gym 19:00 IST (13:30Z) — all past grace at
+  // the 14:25Z wake; journal 21:30 IST (16:00Z) is future → rescheduled.
+  assert.deepEqual(after.scheduler.lastTickResult, { devices: 1, deliveries: 0, skips: 3 });
+  assert.equal(after.scheduler.nextAlarmAt, Date.UTC(2026, 8, 16, 14, 26, 5));
+});
+
+test('alarm: delayed wake (delivered 70 s late) still honors grace-window semantics', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 14, 24, 5));
+  // Only water enabled so occurrence counts stay exactly predictable.
+  const waterOnly = { times: { water: '19:54', gym: '19:00', goals: '08:00', journal: '21:30' }, categories: { water: true, gym: false, goals: false, journal: false } };
+  await doInstance.register(reg(waterOnly));
+  // Reminder 19:54 IST = 14:24Z. Wake lands at 14:25:15 — 75 s late; 75 < 90
+  // → still within the unchanged grace window → delivered.
+  const late = Date.UTC(2026, 8, 16, 14, 25, 15);
+  doInstance.now = () => late;
+  state.storage.setAlarm(late);
+  await doInstance.alarm();
+  assert.equal(send.calls.filter((c) => c.payload.category === 'water').length, 1, 'within 90 s grace → delivered');
+  // A second device registered late: its occurrence is far past grace.
+  await doInstance.register(reg({ ...waterOnly, deviceKey: 'seconddevice0002' }));
+  const before = await doInstance.status();
+  const wayLate = Date.UTC(2026, 8, 16, 14, 30, 5);
+  doInstance.now = () => wayLate;
+  state.storage.setAlarm(wayLate);
+  await doInstance.alarm();
+  assert.equal(send.calls.filter((c) => c.payload.category === 'water').length, 1, 'past grace → no second send');
+  const after = await doInstance.status();
+  assert.equal((after.occurrences.missed || 0) - (before.occurrences.missed || 0), 1, 'second device occurrence marked missed, first never replayed');
+});
+
+test('alarm: midnight IST crossing — dateKey uses the LOCAL date, not UTC', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 18, 30, 4));
+  // 00:05 IST reminder = 18:35 UTC. Wake at 18:35:05Z → 00:05:05 IST Sep 17.
+  // Quiet hours disabled — 00:05 IST would otherwise fall in 22:30–07:00.
+  await doInstance.register(reg({ times: { water: '00:05', gym: '19:00', goals: '08:00', journal: '21:30' }, quietStart: '00:00', quietEnd: '00:00' }));
+  const wake = Date.UTC(2026, 8, 16, 18, 35, 5);
+  doInstance.now = () => wake;
+  state.storage.setAlarm(wake);
+  await doInstance.alarm();
+  const water = send.calls.find((c) => c.payload.category === 'water');
+  assert.ok(water, '00:05 IST reminder due at 18:35 UTC');
+  assert.equal(water.payload.dateKey, '2026-09-17', 'local IST date, one day ahead of UTC date');
+});
+
+test('alarm: quiet hours still suppress delivery through the alarm path', async () => {
+  const { doInstance, send, state } = makeTimedDO(Date.UTC(2026, 8, 16, 17, 30, 4));
+  await doInstance.register(reg({ times: { water: '23:00', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  const wake = Date.UTC(2026, 8, 16, 17, 30, 5); // 23:00:05 IST — quiet (22:30–07:00)
+  doInstance.now = () => wake;
+  state.storage.setAlarm(wake);
+  await doInstance.alarm();
+  assert.equal(send.calls.some((c) => c.payload.category === 'water'), false);
+  const status = await doInstance.status();
+  assert.equal(status.occurrences['quiet-hours'], 1);
+});
+
+test('alarm: delivery failure recorded, subscription kept for the next cycle', async () => {
+  const send = sender();
+  send.fails(500);
+  const wake = Date.UTC(2026, 8, 16, 14, 24, 5);
+  const { doInstance, state } = makeDO(VAPID_ENV, send, { now: () => wake });
+  await doInstance.register(reg({ times: { water: '19:54', gym: '19:00', goals: '08:00', journal: '21:30' } }));
+  state.storage.setAlarm(wake);
+  await doInstance.alarm();
+  const status = await doInstance.status();
+  assert.equal(status.devices, 1, 'transient failure must not remove the device');
+  assert.equal(status.occurrences.failed, 1);
 });

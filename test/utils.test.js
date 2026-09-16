@@ -300,13 +300,19 @@ test('water streak helper composes with calculateStreak', () => {
 });
 
 test('last7Days clamps percentage to 0..100 and labels today', () => {
-  const entries = [makeWaterEntry(99999, new Date(2026, 8, 10, 8).getTime())];
+  // Deterministic: anchor the entry 3 days ago instead of a hardcoded date.
+  // (The original hardcoded 2026-09-10 fell out of the rolling 7-day window
+  // as the real clock advanced — latent date-dependent test bug.)
+  const d = new Date();
+  d.setDate(d.getDate() - 3);
+  d.setHours(8, 0, 0, 0);
+  const entries = [makeWaterEntry(99999, d.getTime())];
   const week = last7Days(entries);
   assert.equal(week.length, 7);
   assert.equal(week[6].label, 'Today');
   assert.ok(week[6].pct >= 0 && week[6].pct <= 100);
-  // 99999 ml always clears any target → last bar (today, by construction) full.
-  assert.ok(week.some((d) => d.pct === 100), `expected a full day, got ${JSON.stringify(week.map((d) => d.pct))}`);
+  // 99999 ml always clears any target → that day's bar full.
+  assert.ok(week.some((x) => x.pct === 100), `expected a full day, got ${JSON.stringify(week.map((x) => x.pct))}`);
 });
 
 test('averageDaily only counts the trailing window', () => {

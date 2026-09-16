@@ -183,8 +183,14 @@ export function zonedTimeToEpoch(nearEpochMs, tz, hh, mm) {
 /** Minutes the zone is offset from UTC at a given instant (e.g. IST = 330). */
 function zoneOffsetMinutes(epochMs, tz) {
   const p = zonedParts(epochMs, tz);
+  // Compare minute-start to minute-start: `zonedParts` has no seconds, so
+  // pairing the wall minute with the RAW epoch (which carries seconds)
+  // smeared sub-minute residue into the offset — an anchor at :31 produced
+  // offset−1 and shifted occurrences a full minute (V1.6.4 regression fix;
+  // alarms can fire late, so anchors with arbitrary seconds are normal).
   const wallUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
-  return Math.round((wallUTC - epochMs) / 60000);
+  const epochMinuteStart = epochMs - (epochMs % 60000);
+  return Math.round((wallUTC - epochMinuteStart) / 60000);
 }
 
 /**
