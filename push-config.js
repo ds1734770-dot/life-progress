@@ -14,7 +14,11 @@
  * · Leave "" when the app is served by `node server.js` itself — the client
  *   then uses same-origin /api/push/*.
  *
+ * PRODUCTION: the notification backend is the deployed Cloudflare Worker
+ * (split deployment — static site on GitHub Pages, backend on Workers).
+ * For local development against `node server.js`, set this back to "".
+ *
  * This file contains NO secrets: the VAPID *public* key is fetched from the
  * backend at runtime; the private key lives only on the backend host.
  */
-window.LIFE_PROGRESS_PUSH_API = "";
+window.LIFE_PROGRESS_PUSH_API = "https://life-progress.ds1734770.workers.dev";
