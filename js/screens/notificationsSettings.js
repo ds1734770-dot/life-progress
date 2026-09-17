@@ -69,6 +69,12 @@ export function deliveryStatusFor(pushState, perm, supported, blocker = null) {
   if (blocker?.state === 'unsupported') {
     return { tone: 'warn', icon: 'alert', label: 'Background reminders aren’t supported on this browser', detail: blocker.reason || 'In-app reminders still work while Life Progress is open.' };
   }
+  // V1.6.5 — the live iOS terminated-PWA state (computed from pageVisible),
+  // surfaced instead of the generic "active" row so the user is never told
+  // delivery is working when the app has been swiped away.
+  if (blocker?.state === 'ios-terminated') {
+    return { tone: 'warn', icon: 'alert', label: 'iOS pauses delivery while the app is swiped away', detail: blocker.hint || 'Keep Life Progress in the app switcher to keep receiving reminders.' };
+  }
   if (perm === 'denied') {
     return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for this site in your browser settings to receive reminders.' };
   }
@@ -121,6 +127,9 @@ async function openDiagnosticsSheet(host) {
       line('Notification permission', r.notificationPermission),
       line('Installed as app (standalone)', r.standalone),
       line('Platform is iOS/iPadOS', r.ios),
+      // V1.6.5 — makes the terminated-PWA state observable on-device.
+      ...(r.ios ? [line('App currently foreground (visible)', r.pageVisible)] : []),
+      ...(r.iosLifecycle ? [line('iOS delivery state', r.iosLifecycle)] : []),
       line('Service worker registration', r.serviceWorker),
       line('Push manager on registration', r.pushManagerOnRegistration),
       line('Push subscription', r.subscription),

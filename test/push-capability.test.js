@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 // ---------------------------------------------------------------------------
 
 const REAL = {};
-const GLOBAL_KEYS = ['window', 'navigator', 'ServiceWorkerRegistration', 'Notification', 'PushManager', 'location'];
+const GLOBAL_KEYS = ['window', 'navigator', 'ServiceWorkerRegistration', 'Notification', 'PushManager', 'location', 'document'];
 
 function takeGlobals() {
   for (const k of GLOBAL_KEYS) {
@@ -65,6 +65,10 @@ function giveGlobals(env) {
   }
   if (env.pushCtor) globalThis.PushManager = function PushManager() {};
   globalThis.location = { origin: env.origin ?? 'https://life-progress.example' };
+  // V1.6.5 — Page Visibility API (used by the iOS terminated-PWA detection).
+  // Only injected when the scenario asks for it, so the harness can also
+  // exercise the no-document fallback branch.
+  if (env.document) globalThis.document = env.document;
 }
 
 function restoreGlobals() {
@@ -203,5 +207,86 @@ test('readiness probe separates capability from setup state (§5)', async () => 
     for (const key of ['secureContext', 'serviceWorkerApi', 'pushApi', 'notificationPermission', 'subscription', 'serverRegistration', 'vapid', 'backgroundReminders']) {
       assert.ok(key in ready, `readiness exposes ${key}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V1.6.5 — iOS terminated-PWA lifecycle detection (closed-app push failure)
+// ---------------------------------------------------------------------------
+
+test('pushCapabilities: pageVisible is true when the document is visible', async () => {
+  await withBrowser({ pushCtor: true, document: { visibilityState: 'visible' } }, (m) => {
+    const caps = m.pushCapabilities();
+    assert.equal(caps.pageVisible, true);
+  });
+});
+
+test('pushCapabilities: pageVisible is false when the document is hidden', async () => {
+  await withBrowser({ pushCtor: true, document: { visibilityState: 'hidden' } }, (m) => {
+    assert.equal(m.pushCapabilities().pageVisible, false);
+  });
+});
+
+test('pushCapabilities: pageVisible is false when document is absent (SW/global fallback)', async () => {
+  await withBrowser({ pushCtor: true }, (m) => {
+    assert.equal(m.pushCapabilities().pageVisible, false, 'no document in the harness → treated as not-foreground');
+  });
+});
+
+test('REGRESSION: iPhone Home Screen PWA, app terminated (hidden) → ios-terminated blocker', async () => {
+  await withBrowser({
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
+    navigatorStandalone: true,
+    pushCtor: false,
+    document: { visibilityState: 'hidden' },
+  }, (m) => {
+    const blocker = m.iosLifecycleBlocker();
+    assert.ok(blocker, 'terminated state must be diagnosed');
+    assert.equal(blocker.state, 'ios-terminated');
+    assert.match(blocker.reason, /swiped away/i);
+    assert.match(blocker.hint, /app switcher/i);
+    assert.ok(!blocker.hint.match(/unsupported/i), 'never mislabels the platform as unsupported');
+  });
+});
+
+test('iPhone Home Screen PWA in the foreground → NO lifecycle blocker', async () => {
+  await withBrowser({
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
+    navigatorStandalone: true,
+    pushCtor: false,
+    document: { visibilityState: 'visible' },
+  }, (m) => {
+    assert.equal(m.iosLifecycleBlocker(), null);
+  });
+});
+
+test('iPhone Safari TAB hidden → still install-required, NOT ios-terminated', async () => {
+  await withBrowser({
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
+    navigatorStandalone: false,
+    document: { visibilityState: 'hidden' },
+  }, (m) => {
+    assert.equal(m.iosLifecycleBlocker(), null, 'tabs were never subscribed — install-required already covers them');
+    const blocker = m.capabilityBlocker(m.pushCapabilities());
+    assert.equal(blocker.state, 'install-required');
+  });
+});
+
+test('Desktop Chrome hidden → NO lifecycle blocker (macOS Safari push has no such limit)', async () => {
+  await withBrowser({ pushCtor: true, document: { visibilityState: 'hidden' } }, (m) => {
+    assert.equal(m.iosLifecycleBlocker(), null);
+  });
+});
+
+test('readiness probe exposes pageVisible + iosLifecycle (diagnostics UI fields)', async () => {
+  await withBrowser({
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15',
+    navigatorStandalone: true,
+    pushCtor: false,
+    document: { visibilityState: 'hidden' },
+  }, async (m) => {
+    const ready = await m.pushReadiness();
+    assert.equal(ready.pageVisible, false);
+    assert.equal(ready.iosLifecycle, 'ios-terminated');
   });
 });

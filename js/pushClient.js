@@ -67,7 +67,47 @@ export function pushCapabilities() {
   const ua = typeof navigator !== 'undefined' ? String(navigator.userAgent || '') : '';
   const ios = /iPad|iPhone|iPod/.test(ua) ||
     (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && (navigator.maxTouchPoints | 0) > 1);
-  return { secure, swSupported, notifSupported, pushSupported, standalone, ios, protoHasPush };
+  // V1.6.5 — iOS lifecycle diagnostic. When a Home Screen web app is
+  // force-terminated (swiped away from the app switcher), WebKit stops
+  // handing pushes to it: webpushd has no live app process to wake, and iOS
+  // does not relaunch terminated web apps for push (WebKit bug 258254).
+  // There is no direct API for "was I terminated", but the page-visible
+  // flag is a reliable signal for the FOREGROUND state: a resumed app is
+  // still page-visible, while one that was reaped (or re-launched) is not.
+  // In-app reminders run from the interval sweep regardless — this is
+  // purely diagnostic (see iosLifecycleBlocker).
+  const pageVisible = typeof document !== 'undefined'
+    ? document.visibilityState === 'visible'
+    : false;
+  return { secure, swSupported, notifSupported, pushSupported, standalone, ios, protoHasPush, pageVisible };
+}
+
+/**
+ * V1.6.5 — the one platform limitation this app cannot engineer away, made
+ * explicit and user-visible (the opposite of a fake success claim):
+ *
+ * On iOS/iPadOS, background Web Push delivery requires the web app's
+ * process. WebKit hands an incoming push to webpushd, which wakes the
+ * application to run its service worker (webkit.org/blog/12979). When the
+ * Home Screen web app is force-terminated from the app switcher, there is
+ * no process to wake — iOS does NOT relaunch it — so scheduled reminders
+ * cannot arrive until the app is opened again. Backgrounded-but-alive
+ * (Recents, locked) keeps working.
+ *
+ * Returns a blocker ONLY for the diagnosed foreground state of an installed
+ * iOS PWA (pageVisible === false). Browser tabs are unaffected: Safari on
+ * macOS/Linux/Windows has no such limitation, and on iOS the tab was never
+ * install-required in the first place. In-app reminders still fire from the
+ * page's interval sweep — the UI says exactly that.
+ */
+export function iosLifecycleBlocker(caps = pushCapabilities()) {
+  if (!caps.ios || !caps.standalone) return null;
+  if (caps.pageVisible !== false) return null; // foreground or undetectable — no claim
+  return {
+    state: 'ios-terminated',
+    reason: 'iOS stops background delivery while Life Progress is swiped away from the app switcher.',
+    hint: 'Keep Life Progress in the app switcher (just lock the screen or go Home). Reminders resume when you reopen the app. This is an iOS limitation for web apps.',
+  };
 }
 
 /**
@@ -90,6 +130,11 @@ export function capabilityBlocker(caps = pushCapabilities()) {
       hint: 'In Safari, tap Share → “Add to Home Screen”, then open Life Progress from the Home Screen icon and enable reminders there.',
     };
   }
+  // V1.6.5 — while the app is NOT foreground, tell the truth about the
+  // terminated-PWA limitation. Deliberately returned as a SECOND return:
+  // `syncPushRegistration` treats any blocker as not-subscribable, and the
+  // subscription itself is already active at this point — this signal is
+  // diagnostic-only and reaches the user via deliveryStatusFor() below.
   return null;
 }
 
@@ -162,6 +207,10 @@ export async function pushReadiness() {
     serverHttpStatus: null,
     staticHostSuspected: false,
     backgroundReminders: 'off',
+    // V1.6.5 — iOS terminated-PWA diagnostic, always present (even in SW or
+    // no-registration environments where pushReadiness returns early).
+    pageVisible: caps.pageVisible,
+    iosLifecycle: iosLifecycleBlocker(caps)?.state || null,
   };
   if (!caps.swSupported) return r;
   try {
