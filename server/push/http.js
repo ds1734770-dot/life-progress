@@ -12,6 +12,7 @@
  * requests and broader than the single origin this app needs.
  */
 import { isValidTimezone, isValidTime } from '../../js/timeCore.js';
+import { normalizePlatform } from './dispatch.js';
 
 export const CATEGORIES = ['water', 'gym', 'goals', 'journal'];
 
@@ -59,20 +60,29 @@ export function publicVapidInfo(config) {
  * Validate and normalize a registration body — identical contract in both
  * backends (extracted verbatim from server/api.js). Returns { error } or
  * { value }. Only known fields survive; unknown fields are dropped.
+ *
+ * V2.0 Phase 2 — platform-aware (§4/§5):
+ *  · `platform` is OPTIONAL: absent/empty means 'web' (legacy bodies stay
+ *    valid and keep the exact legacy validation). Unknown values REJECT —
+ *    they never silently become web.
+ *  · web → the pre-existing checks, unchanged (https endpoint + p256dh/auth).
+ *  · ios/android → require a push `token` instead; endpoint/p256dh/auth are
+ *    NOT required (there is no Web Push subscription for native devices).
+ *    Token bounds are deliberately length-only (16–4096, no whitespace):
+ *    APNs tokens are 64-hex today and FCM tokens are longer colon-bearing
+ *    strings, and over-restricting the charset would break a future
+ *    credential format for no security gain. The token is opaque to us.
  */
 export function validateRegistration(body) {
   if (!body || typeof body !== 'object') return { error: 'invalid body' };
   const { deviceKey, endpoint, keys, timezone, categories, times, quietStart, quietEnd, enabled } = body;
 
+  // Unknown platform values are rejected, never coerced to web (§2).
+  const platform = normalizePlatform(body.platform);
+  if (platform === null) return { error: 'invalid platform' };
+
   if (typeof deviceKey !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(deviceKey)) {
     return { error: 'invalid deviceKey' };
-  }
-  if (typeof endpoint !== 'string' || !/^https:\/\/[^\s]+$/.test(endpoint) || endpoint.length > 2048) {
-    return { error: 'invalid endpoint' };
-  }
-  if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' ||
-      keys.p256dh.length > 512 || keys.auth.length > 256) {
-    return { error: 'invalid keys' };
   }
   const tz = isValidTimezone(timezone);
   if (!tz) return { error: 'invalid timezone' };
@@ -91,11 +101,27 @@ export function validateRegistration(body) {
   const qs = isValidTime(quietStart) ? quietStart : '22:30';
   const qe = isValidTime(quietEnd) ? quietEnd : '07:00';
 
+  if (platform === 'web') {
+    // Legacy Web Push checks — byte-identical to the pre-platform contract.
+    if (typeof endpoint !== 'string' || !/^https:\/\/[^\s]+$/.test(endpoint) || endpoint.length > 2048) {
+      return { error: 'invalid endpoint' };
+    }
+    if (!keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string' ||
+        keys.p256dh.length > 512 || keys.auth.length > 256) {
+      return { error: 'invalid keys' };
+    }
+  } else if (typeof body.token !== 'string' || body.token.length < 16 || body.token.length > 4096 || /\s/.test(body.token)) {
+    return { error: 'invalid token' };
+  }
+
   return {
     value: {
       deviceKey,
-      endpoint,
-      keys: { p256dh: keys.p256dh, auth: keys.auth },
+      platform,
+      // web only:
+      ...(platform === 'web'
+        ? { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } }
+        : { token: body.token }),
       timezone: tz,
       categories: cats,
       times: tms,

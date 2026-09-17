@@ -30,6 +30,7 @@
  * notification copy (the service worker derives copy on-device).
  */
 import { computeNextOccurrences, decideOccurrence, buildPushPayload, ROUTES } from '../server/push/domain.js';
+import { dispatchNotification, OUTCOME } from '../server/push/dispatch.js';
 import { sendPushMessage } from '../server/push/webpush.js';
 
 /**
@@ -56,6 +57,8 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   endpoint   TEXT NOT NULL,
   p256dh     TEXT NOT NULL,
   auth       TEXT NOT NULL,
+  platform   TEXT NOT NULL DEFAULT 'web',
+  token      TEXT,
   timezone   TEXT NOT NULL,
   times      TEXT NOT NULL,
   categories TEXT NOT NULL,
@@ -84,6 +87,50 @@ CREATE TABLE IF NOT EXISTS notification_occurrences (
 );
 CREATE INDEX IF NOT EXISTS idx_occ_device ON notification_occurrences(device_key, category);
 `;
+
+/**
+ * V2.0 Phase 2 — additive migration for tables created BEFORE platform/token
+ * existed. `CREATE TABLE IF NOT EXISTS` does NOT add columns to a table that
+ * already exists (the production DO predates this change), so the columns are
+ * added here exactly once, guarded by `PRAGMA table_info`. Existing rows get
+ * platform = 'web' (the column DEFAULT) and token = NULL — no re-registration
+ * required (§7). Never destructive: no DROP, no table recreation, no resets.
+ */
+export const MIGRATE_SQL = [
+  "ALTER TABLE push_subscriptions ADD COLUMN platform TEXT NOT NULL DEFAULT 'web'",
+  'ALTER TABLE push_subscriptions ADD COLUMN token TEXT',
+];
+
+/**
+ * Idempotent column migration. Detection first (`PRAGMA table_info` — already
+ * modeled by both SQLite test harnesses); if PRAGMA is ever unavailable on a
+ * runtime, it falls back to probing the ALTERs where a "duplicate column"
+ * error means another run already migrated: success, not failure. Returns the
+ * list of columns actually added (empty on already-migrated databases).
+ */
+export function migrateSchema(sql) {
+  let columns = null;
+  try {
+    columns = sql.exec('PRAGMA table_info(push_subscriptions)').rows.map((r) => r.name);
+  } catch {
+    columns = null; // PRAGMA unsupported → probe mode below
+  }
+  const added = [];
+  for (const stmt of MIGRATE_SQL) {
+    const name = /ADD COLUMN (\w+)/.exec(stmt)[1];
+    if (columns !== null) {
+      if (columns.includes(name)) continue; // already migrated
+    }
+    try {
+      sql.exec(stmt);
+      added.push(name);
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err?.message || err))) throw err;
+      // duplicate column = a concurrent/earlier migration won the race: fine.
+    }
+  }
+  return added;
+}
 
 /**
  * Uniform SQL interface used by LPPushDO:
@@ -120,7 +167,10 @@ export class LPPushDO {
     // every wake; tests pin `now` so nothing depends on wall-clock time.
     this.now = deps.now || (() => Date.now());
     this.sql = adaptWorkerSql(state.storage.sql);
-    this.sql.exec(SCHEMA_SQL); // idempotent (IF NOT EXISTS)
+    this.sql.exec(SCHEMA_SQL); // idempotent (IF NOT EXISTS) — complete for FRESH databases
+    // V2.0 Phase 2 — bring PRE-EXISTING tables up to the platform-aware
+    // schema. Idempotent: no-ops when the columns already exist (§6).
+    migrateSchema(this.sql);
     // Startup recovery (§6): after a deploy, eviction or crash the DO may
     // be re-constructed with devices registered but NO alarm booked. Arm it
     // here so existing subscriptions are scheduled again without waiting
@@ -165,16 +215,29 @@ export class LPPushDO {
 
   async register(v) {
     const now = Date.now();
+    // V2.0 Phase 2 — platform-aware upsert (§4/§8). Same deviceKey upsert
+    // semantics as before; platform/token ride along. Web-only fields are
+    // '' for native rows (the columns are NOT NULL in the existing table and
+    // must not be rebuilt); dispatch never reads them for ios/android.
+    // A re-register fully replaces platform/token, so a device can move
+    // between transports (e.g. token rotation) without a second identity.
+    const platform = v.platform || 'web';
+    const endpoint = v.endpoint ?? '';
+    const p256dh = v.keys?.p256dh ?? '';
+    const auth = v.keys?.auth ?? '';
+    const token = v.token ?? null;
     this.sql.exec(
       `INSERT INTO push_subscriptions
-         (device_key, endpoint, p256dh, auth, timezone, times, categories,
+         (device_key, endpoint, p256dh, auth, platform, token, timezone, times, categories,
           quiet_start, quiet_end, enabled, disabled, failure_count, last_error,
           created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, ?, ?)
        ON CONFLICT(device_key) DO UPDATE SET
          endpoint = excluded.endpoint,
          p256dh = excluded.p256dh,
          auth = excluded.auth,
+         platform = excluded.platform,
+         token = excluded.token,
          timezone = excluded.timezone,
          times = excluded.times,
          categories = excluded.categories,
@@ -185,7 +248,7 @@ export class LPPushDO {
          failure_count = 0,
          last_error = NULL,
          updated_at = excluded.updated_at`,
-      v.deviceKey, v.endpoint, v.keys.p256dh, v.keys.auth, v.timezone,
+      v.deviceKey, endpoint, p256dh, auth, platform, token, v.timezone,
       JSON.stringify(v.times), JSON.stringify(v.categories),
       v.quietStart, v.quietEnd, v.enabled ? 1 : 0, now, now
     );
@@ -245,20 +308,26 @@ export class LPPushDO {
     if (!row || row.disabled) {
       return { ok: false, error: 'subscription not found — enable notifications first' };
     }
-    const vapid = this.#vapid();
-    if (!vapid) return { ok: false, error: 'VAPID not configured' };
+    // V2.0 Phase 2 — delivery goes through the platform dispatcher (§2/§10).
+    // The row is handed over verbatim; the dispatcher normalizes platform
+    // (legacy rows without one are web) and picks the provider.
     const occurrenceId = `${row.device_key}:test:${Date.now()}`;
     const payload = buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: ROUTES.test });
-    const result = await this.sendPushMessage(
-      { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } }, payload, vapid
+    const result = await dispatchNotification(
+      { platform: row.platform, endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth }, token: row.token },
+      payload,
+      { vapid: this.#vapid(), sendPushMessage: this.sendPushMessage }
     );
-    if (result.ok) {
+    if (result.outcome === OUTCOME.DELIVERED) {
       this.#markOutcome(row.device_key, true);
       return { ok: true };
     }
-    const gone = result.status === 404 || result.status === 410;
-    this.#markOutcome(row.device_key, false, result.error || `status ${result.status}`, gone);
-    return { ok: false, error: result.error || `push service returned ${result.status}`, transient: !!result.transient };
+    if (result.outcome === OUTCOME.NOT_CONFIGURED) {
+      return { ok: false, error: result.reason || 'provider not configured' };
+    }
+    const gone = result.outcome === OUTCOME.GONE;
+    this.#markOutcome(row.device_key, false, result.error || result.reason || 'delivery failed', gone);
+    return { ok: false, error: result.error || result.reason || 'delivery failed', transient: result.outcome === OUTCOME.TRANSIENT };
   }
 
   // -------------------------------------------------------------------------
@@ -358,19 +427,32 @@ export class LPPushDO {
         const payload = buildPushPayload({
           category: occ.category, occurrenceId: occ.occurrenceId, dateKey: occ.dateKey, route: ROUTES[occ.category],
         });
-        const result = await this.sendPushMessage(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload, vapid
+        // V2.0 Phase 2 — dispatch through the platform seam (§10): same
+        // payload, same claim, same outcome bookkeeping; only the transport
+        // invocation was replaced. Native rows resolve to their (still
+        // unconfigured) providers — never to Web Push (§2).
+        const result = await dispatchNotification(
+          { platform: sub.platform, endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth }, token: sub.token },
+          payload,
+          { vapid, sendPushMessage: this.sendPushMessage }
         );
-        if (result.ok) {
+        if (result.outcome === OUTCOME.DELIVERED) {
           this.#setOccurrence(occ.occurrenceId, { status: 'delivered', sent_at: Date.now() });
           this.#markOutcome(sub.device_key, true);
           deliveries++;
+        } else if (result.outcome === OUTCOME.NOT_CONFIGURED) {
+          // Honest, recorded state: nothing to send with (e.g. VAPID missing
+          // for web, or a native provider before its phase). The occurrence
+          // stays claimed — no retry loop, no silent success.
+          this.#setOccurrence(occ.occurrenceId, { status: 'not-configured' });
+          this.#markOutcome(sub.device_key, false, result.reason || 'provider not configured', false);
+          skips++;
         } else {
-          const gone = result.status === 404 || result.status === 410;
+          const gone = result.outcome === OUTCOME.GONE;
           this.#setOccurrence(occ.occurrenceId, { status: gone ? 'gone' : 'failed' });
-          this.#markOutcome(sub.device_key, false, result.error || `status ${result.status}`, gone);
+          this.#markOutcome(sub.device_key, false, result.error || result.reason || `delivery failed`, gone);
           if (gone) {
-            // Push service definitively reports the subscription expired (§11).
+            // Provider definitively reports the subscription/token expired (§11).
             this.sql.exec('DELETE FROM push_subscriptions WHERE device_key = ?', sub.device_key);
           }
           skips++;

@@ -30,7 +30,7 @@
  * data — the service worker derives context-aware copy locally.
  */
 import { claimOccurrence, listSubscriptions, markSubscriptionOutcome, hasOccurrence, updateOccurrence } from './store.js';
-import { sendPushMessage } from './push/webpush.js';
+import { dispatchNotification, OUTCOME } from './push/dispatch.js';
 import { nextDailyOccurrence } from '../js/timeCore.js';
 import {
   GRACE_MS,
@@ -54,17 +54,29 @@ async function deliverOccurrence(sub, occ, vapid) {
     dateKey: occ.dateKey,
     route: ROUTES[occ.category],
   });
-  const result = await sendPushMessage({ endpoint: sub.endpoint, keys: sub.keys }, payload, vapid);
-  if (result.ok) {
+  // V2.0 Phase 2 — dispatch through the platform seam (§11): the shared
+  // dispatcher picks the provider (web → Web Push; ios/android → their own,
+  // still-unconfigured providers — never a silent Web Push fallback).
+  // Typed outcomes are mapped back onto the legacy { ok, status, transient }
+  // shape here so the retry loop and outcome bookkeeping below stay
+  // byte-identical to the pre-dispatcher behavior.
+  const result = await dispatchNotification(
+    { platform: sub.platform, endpoint: sub.endpoint, keys: sub.keys, token: sub.token },
+    payload,
+    { vapid }
+  );
+  if (result.outcome === OUTCOME.DELIVERED) {
     await markSubscriptionOutcome(sub.deviceKey, { ok: true });
     return { ok: true };
   }
+  const error = result.error || result.reason || 'delivery failed';
+  const status = result.outcome === OUTCOME.GONE ? 410 : result.status ?? undefined;
   await markSubscriptionOutcome(sub.deviceKey, {
     ok: false,
-    error: result.error || `status ${result.status}`,
-    permanent: result.status === 404 || result.status === 410,
+    error,
+    permanent: result.outcome === OUTCOME.GONE,
   });
-  return { ok: false, ...result };
+  return { ok: false, status, transient: result.outcome === OUTCOME.TRANSIENT, error };
 }
 
 /**

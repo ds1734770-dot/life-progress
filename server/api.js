@@ -14,7 +14,7 @@ import {
   listSubscriptions,
   markSubscriptionOutcome,
 } from './store.js';
-import { sendPushMessage } from './push/webpush.js';
+import { dispatchNotification, OUTCOME } from './push/dispatch.js';
 import { buildPushPayload } from './scheduler.js';
 import {
   corsHeaders,
@@ -150,17 +150,25 @@ export async function handlePushApi(req, res, pathname) {
       const vapid = await getVapidConfig();
       const occurrenceId = `${sub.deviceKey}:test:${Date.now()}`;
       const payload = buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: '#/dashboard' });
-      const result = await sendPushMessage({ endpoint: sub.endpoint, keys: sub.keys }, payload, vapid);
-      if (result.ok) {
+      // V2.0 Phase 2 — the test path uses the same platform dispatcher as
+      // the scheduler (§11): no provider logic duplicated here.
+      const result = await dispatchNotification(
+        { platform: sub.platform, endpoint: sub.endpoint, keys: sub.keys, token: sub.token },
+        payload,
+        { vapid }
+      );
+      if (result.outcome === OUTCOME.DELIVERED) {
         await markSubscriptionOutcome(sub.deviceKey, { ok: true });
         json(res, 200, { ok: true });
+      } else if (result.outcome === OUTCOME.NOT_CONFIGURED) {
+        json(res, 503, { ok: false, error: result.reason || 'provider not configured' });
       } else {
         await markSubscriptionOutcome(sub.deviceKey, {
           ok: false,
-          error: result.error || `status ${result.status}`,
-          permanent: result.status === 404 || result.status === 410,
+          error: result.error || result.reason || `status ${result.status}`,
+          permanent: result.outcome === OUTCOME.GONE,
         });
-        json(res, 502, { ok: false, error: result.error || `push service returned ${result.status}`, transient: !!result.transient });
+        json(res, 502, { ok: false, error: result.error || result.reason || `push service returned ${result.status}`, transient: result.outcome === OUTCOME.TRANSIENT });
       }
       return true;
     }
