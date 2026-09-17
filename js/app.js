@@ -14,6 +14,7 @@ import { showOnboarding } from './onboarding.js';
 import { playLaunchExperience } from './launch.js';
 import { checkAchievementsNow } from './celebration.js';
 import { runReminderSweep, pruneDeliveryState } from './notifications.js';
+import { isNative } from './platform.js';
 
 async function boot() {
   try {
@@ -59,9 +60,14 @@ async function boot() {
   //   · a reminder enabled while the server was unreachable (pending → active)
   //   · prefs changed while the device was offline
   //   · a subscription the browser replaced since last registration
-  import('./pushClient.js')
-    .then(({ syncPushRegistration }) => syncPushRegistration().catch(() => {}))
-    .catch(() => {}); // offline/broken storage — local-only mode keeps working
+  // V2.0 Phase 1 — WEB ONLY: native shells have no Web Push subscription and
+  // get their transport (APNs/FCM) in a later phase; syncing a native shell
+  // into the Web Push backend would create a bogus registration.
+  if (!isNative()) {
+    import('./pushClient.js')
+      .then(({ syncPushRegistration }) => syncPushRegistration().catch(() => {}))
+      .catch(() => {}); // offline/broken storage — local-only mode keeps working
+  }
 }
 
 function scheduleReminders() {
@@ -87,6 +93,18 @@ function scheduleReminders() {
 }
 
 function registerServiceWorker() {
+  // V2.0 Phase 1 — the web/native boundary (docs/native-push-migration.md).
+  // The service worker is the PWA's offline shell + Web Push receiver and
+  // stays 100% unchanged for every browser/PWA environment. Native shells
+  // bundle the app locally and receive notifications through APNs/FCM in a
+  // later phase, so registering a network-first SW here would only add
+  // update churn and a WebView-scope footgun (Capacitor serves the app from
+  // capacitor://localhost / https://localhost, which the http/https protocol
+  // check would NOT catch) without any benefit. Platform detection uses the
+  // Capacitor bridge only (js/platform.js) — no user-agent sniffing.
+  // TEMPORARY EXPLICIT GATE: native push is a later phase; until then native
+  // shells get no push transport at all (honest, not faked).
+  if (isNative()) return;
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     // Relative URL — the SW controls the whole directory tree, so this works
     // at a domain root and under a subpath (e.g. GitHub Pages project sites).

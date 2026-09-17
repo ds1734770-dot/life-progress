@@ -7,7 +7,7 @@
     "start": "node server.js",
     "icons": "node scripts/make-icons.js",
     "launch-bg": "node scripts/make-launch-bg.js",
-    "test": "node --test test/utils.test.js test/personalization.test.js test/tabbar-dock.test.js test/history.test.js test/achievements.test.js test/gym-templates.test.js test/notifications.test.js test/push-scheduling.test.js test/push-sw.test.js test/push-crypto.test.js test/push-capability.test.js test/push-connection.test.js test/push-deploy.test.js test/push-cloudflare.test.js test/push-worker.test.js test/pose-geometry.test.js test/pose-alignment.test.js test/pose-reference.test.js test/camera-coordinates.test.js",
+    "test": "node --test test/utils.test.js test/personalization.test.js test/tabbar-dock.test.js test/history.test.js test/achievements.test.js test/gym-templates.test.js test/notifications.test.js test/push-scheduling.test.js test/push-sw.test.js test/push-crypto.test.js test/push-capability.test.js test/push-connection.test.js test/push-deploy.test.js test/push-cloudflare.test.js test/push-worker.test.js test/platform.test.js test/pose-geometry.test.js test/pose-alignment.test.js test/pose-reference.test.js test/camera-coordinates.test.js",
     "test:push": "node --test test/push-scheduling.test.js test/push-sw.test.js test/push-crypto.test.js test/push-capability.test.js test/push-connection.test.js test/push-deploy.test.js test/push-cloudflare.test.js test/push-worker.test.js",
     "dev:push": "npx wrangler dev",
     "deploy:push": "npx wrangler deploy",
@@ -22,11 +22,19 @@
     "qa:gym": "node scripts/qa-gym.js",
     "qa:notif": "node scripts/qa-notifications.js",
     "pose:assets": "node scripts/fetch-pose-assets.js",
+    "build:web": "node scripts/build-web.js",
+    "cap:sync": "npm run build:web && npx cap sync",
+    "cap:open:ios": "npx cap open ios",
+    "cap:open:android": "npx cap open android",
     "screenshots": "node scripts/screenshots.js",
     "screenshots:camera": "node scripts/camera-screenshots.js"
   },
   "license": "MIT",
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
     "wrangler": "^4.132.0"
   }
 }
