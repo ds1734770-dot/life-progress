@@ -1,7 +1,17 @@
 # Native App Migration — Architecture & Decision Record
 
-**Status:** Phase 3 complete (Capacitor scaffolding → multi-platform dispatcher + DO schema → iOS APNs provider + native client). FCM/Android is **not** implemented yet.
+**Status:** COMPLETE (Phases 1–7): Capacitor scaffolding → multi-platform dispatcher + DO schema → iOS APNs → Android FCM → cross-platform hardening. All three transports implemented behind one dispatcher.
 **Started:** 2026-09-17 · Branch: `main`
+
+## Validation status at a glance
+
+| Layer | Status |
+|---|---|
+| Automated tests (636) | ✅ PASSING |
+| Providers (Web Push / APNs / FCM) | ✅ Implemented, mocked-transport verified |
+| iOS physical delivery (token, locked, background, force-quit, cold-start tap) | ⏳ **DEFERRED — requires macOS/Xcode + Apple Developer + physical iPhone.** Automated mocks do NOT count. The PWA force-quit limitation is NOT considered solved until this runs. |
+| Android physical delivery | ⏳ **PENDING — no Android device available.** Automated mocks do NOT count. |
+| Deployment | ⏳ NOT deployed (no authorization) |
 
 ---
 
@@ -161,7 +171,7 @@ npm run cap:open:android  # Android Studio
 - Web Push crypto (`server/push/webpush.js` — RFC 8291/8188/8292) and
   `server/push/domain.js` remain byte-identical.
 
-## 11. Phase 3 — iOS APNs native delivery (complete in code; device testing pending)
+## 11. Phase 3 — iOS APNs native delivery (complete in code; physical validation DEFERRED)
 
 ### Delivery path
 
@@ -253,4 +263,109 @@ Everything below is pending; nothing has been enrolled, created, or uploaded:
    the key because provider tokens are minted per-send.
 8. Later: privacy disclosure, icons/splash, App Store metadata.
 
-FCM/Android remains untouched (`not_configured`) until its own phase.
+FCM/Android: see §13.
+
+## 13. Phase 5 — Android FCM native delivery (complete in code; physical validation PENDING)
+
+### Delivery path
+
+```
+DO alarm → occurrence → dispatchNotification
+  → resolveProvider('android') → server/push/fcm.js
+  → OAuth2 RS256 service-account JWT → access token (cached 55 min)
+  → POST fcm.googleapis.com/v1/projects/{id}/messages:send
+  → notification (system-tray) + data (identity only) + android config
+  → typed outcome → existing occurrence bookkeeping
+```
+
+### FCM provider (`server/push/fcm.js`)
+
+- **Auth**: OAuth 2.0 service-account flow — RS256 JWT
+  (`iss = client_email`, `scope = firebase.messaging`,
+  `aud = oauth2.googleapis.com/token`) signed with raw WebCrypto
+  (`RSASSA-PKCS1-v1_5` + SHA-256), exchanged for a short-lived access token.
+  No Firebase Admin SDK (Node-only). Accepts the service-account JSON or a
+  raw PEM; double-escaped `\n` sequences from secret stores are normalized.
+- **Runtime**: unlike APNs, Google's endpoint accepts HTTP/1.1 — BOTH runtimes
+  use global fetch. No extra adapter. One provider, zero duplication.
+- **Message shape**: `notification` (title/body from the SHARED copy table in
+  `js/swPush.js` — one copy system across web/iOS/Android) so Android shows
+  the message in the system tray even when the app process is dead (§5.9);
+  `data` carries ONLY identity metadata (type/category/occurrenceId/dateKey/
+  route) for deep links + dedup — no personal content; `android.priority`
+  HIGH for reminders, DEFAULT for tests; `channel_id` per category.
+- **Response mapping**: 200→delivered · 404/410 + UNREGISTERED→gone ·
+  429/5xx→transient · 401/403 (server identity)→not_configured · other
+  4xx→permanent. Network throw→transient; key/JSON errors→not_configured
+  (signing vs transport failures are distinguished).
+- **Canonical env names** (`FCM_ENV_KEYS`): `FCM_PROJECT_ID`,
+  `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`. Set via `wrangler secret put`;
+  never committed, never logged, never in frontend/Android source.
+
+### Android client
+
+The Phase 3 client (`js/nativePush.js`) was generalized to both platforms —
+the Capacitor plugin exposes FCM tokens on Android through the same
+`registration` event. Registration posts `platform:'android'` + opaque token
+(no endpoint/p256dh/auth); rotation reuses the SAME deviceKey; taps deep-link
+through the shared allowlisted hash routes; foreground messages are presented
+by the plugin. Remains inert on web (test-enforced).
+
+### Android build configuration (§5.10) — manual prerequisites
+
+1. **Firebase project** → add an Android app with the FINAL application ID
+   (currently temporary `com.example.lifeprogress` in
+   `android/app/build.gradle` — do not silently promote it).
+2. **`google-services.json`** → drop into `android/app/`. Capacitor's
+   generated gradle applies the google-services plugin automatically when the
+   file is present. It is gitignored — never commit it.
+3. **Server credentials** → Firebase console → Project settings → Service
+   accounts → *Generate New Private Key*; set `FCM_PROJECT_ID`,
+   `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY` as Cloudflare secrets.
+4. **Release signing** → generate a keystore locally (`*.jks`), configure
+   `keystore.properties`/`key.properties` (both gitignored); Play Store also
+   accepts App Signing by Google Play.
+5. **Physical device matrix** (§28): app open / background / locked / removed
+   from Recents / force-quit / reboot / permission / battery optimization /
+   tap deep link / quiet hours / duplicates / timezone — all PENDING until an
+   Android device is available.
+
+## 14. Phase 6 — hardening results (audit + one fix)
+
+- **One identity model** (§6.1): all platforms register through
+  `validateRegistration` + the same upsert; native rows carry no Web Push
+  fields.
+- **One dispatch path** (§6.2): every platform flows
+  scheduler → occurrence → `dispatchNotification` → provider; legacy rows
+  (no platform) still route as web through the dispatcher.
+- **Occurrence semantics unchanged** (§6.3): occurrence IDs, timezone/DST
+  math, quiet hours, grace window, dedup, alarm scheduling untouched.
+- **One copy system** (§6.4): `js/swPush.js` copy table serves web, APNs
+  (`toApnsPayload`) and FCM (`toFcmMessage`); only transport formatting
+  differs.
+- **Quiet hours** (§6.5): proven identical at DO level for web and Android.
+- **Dedup** (§6.6): atomic occurrence claims proven single-delivery across
+  repeat ticks; distinct per-device/per-day occurrence ids never collide.
+- **Failures** (§6.7): gone→cleanup, transient→retain, permanent→retain+
+  record, not_configured→retain; provider throws are contained as transient —
+  one broken device never stops others (proven with two devices).
+- **Token lifecycle** (§6.8): rotation/unregister proven for both platforms.
+- **Platform switching** (§6.9): web→android and android→ios on one deviceKey
+  deterministically replace platform+token (no duplicate identities).
+- **Transport independence** (§6.10): **fix landed** — the DO tick's
+  missing-VAPID bail previously blocked ALL delivery; it now applies only to
+  web-only populations, so native devices are never blocked by web credential
+  absence. Web-era behavior preserved for web-only deployments.
+- **Native/web separation** (§6.10): native never touches service worker /
+  PushManager / VAPID; web never touches APNs/FCM.
+
+## 15. Final secret configuration reference
+
+| Secret | Used by | Notes |
+|---|---|---|
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | Web Push | Existing — unchanged |
+| `APNS_PRIVATE_KEY` (PEM), `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID`, `APNS_ENV=production\|sandbox` | iOS/APNs | `.p8` key; sandbox host auto-selected |
+| `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY` | Android/FCM | service-account JSON or PEM accepted |
+
+All set via `wrangler secret put` on the Worker; all optional at deploy time
+(providers report honest `not_configured` per device until set).
