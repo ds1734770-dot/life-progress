@@ -415,9 +415,15 @@ export class LPPushDO {
   // -------------------------------------------------------------------------
 
   async tick(nowMs = this.now()) {
-    const vapid = this.#vapid();
-    if (!vapid) return { ok: false, error: 'VAPID not configured' };
     const subs = this.#listSubs().filter((s) => s.enabled !== 0 && !s.disabled);
+    const vapid = this.#vapid();
+    // V2.0 Phase 6 (§6.10 transport independence): VAPID gates ONLY web rows.
+    // A web-only population without VAPID bails exactly as before (web-era
+    // behavior preserved); with any native device present the tick proceeds
+    // and web rows fall to the web provider's per-device not_configured.
+    if (!vapid && subs.every((s) => (s.platform || 'web') === 'web')) {
+      return { ok: false, error: 'VAPID not configured' };
+    }
     let deliveries = 0;
     let skips = 0;
     for (const sub of subs) {
