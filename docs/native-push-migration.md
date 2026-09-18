@@ -238,8 +238,10 @@ Everything below is pending; nothing has been enrolled, created, or uploaded:
 4. **APNs Auth Key (.p8)** — create in the Apple Developer portal (one key
    covers sandbox + production). Record the **Key ID** and **Team ID**.
 5. **Secrets** (never committed): set via `wrangler secret put` on the
-   Worker — `APNS_KEY_P8` (PEM), `APNS_KEY_ID`, `APNS_TEAM_ID`,
-   `APNS_BUNDLE_ID`, and `APNS_ENV=sandbox|production`. The provider reads
+   Worker — `APNS_PRIVATE_KEY` (PEM), `APNS_KEY_ID`, `APNS_TEAM_ID`,
+   `APNS_BUNDLE_ID`, and `APNS_ENV=production|sandbox` (default:
+   `production`). These exact names are the canonical scheme implemented in
+   `server/push/apns.js` (`APNS_ENV_KEYS`) — do not introduce aliases. The provider reads
    only env config and returns honest `not_configured` when unset — safe to
    deploy before secrets exist.
 6. **Physical iPhone test matrix** — install via Xcode/TestFlight; verify
