@@ -44,6 +44,13 @@ android/app/src/main/assets/public/
 google-services.json
 GoogleService-Info.plist
 firebase-service-account*.json
+service-account*.json
+
+# Android release signing keys (never commit)
+*.jks
+*.keystore
+keystore.properties
+android/key.properties
 
 # Environment / secret files (never commit)
 .env

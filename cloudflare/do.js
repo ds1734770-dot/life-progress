@@ -169,6 +169,10 @@ export class LPPushDO {
     // negotiates HTTP/2). Undefined in production → dispatcher defaults.
     this.apns = deps.apns;
     this.apnsTransport = deps.apnsTransport;
+    // V2.0 Phase 5 — FCM test/override seams, same convention. Undefined in
+    // production → dispatcher defaults (env-configured real provider).
+    this.fcm = deps.fcm;
+    this.fcmTransport = deps.fcmTransport;
     // Test-only injected clock (§27): production uses the real instant at
     // every wake; tests pin `now` so nothing depends on wall-clock time.
     this.now = deps.now || (() => Date.now());
@@ -322,7 +326,7 @@ export class LPPushDO {
     const result = await dispatchNotification(
       { platform: row.platform, endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth }, token: row.token },
       payload,
-      { vapid: this.#vapid(), sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport }
+      { vapid: this.#vapid(), sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport, fcm: this.fcm, fcmTransport: this.fcmTransport }
     );
     if (result.outcome === OUTCOME.DELIVERED) {
       this.#markOutcome(row.device_key, true);
@@ -440,7 +444,7 @@ export class LPPushDO {
         const result = await dispatchNotification(
           { platform: sub.platform, endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth }, token: sub.token },
           payload,
-          { vapid, sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport }
+          { vapid, sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport, fcm: this.fcm, fcmTransport: this.fcmTransport }
         );
         if (result.outcome === OUTCOME.DELIVERED) {
           this.#setOccurrence(occ.occurrenceId, { status: 'delivered', sent_at: Date.now() });

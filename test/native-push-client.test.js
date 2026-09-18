@@ -291,18 +291,40 @@ test('iOS registration: denied permission → denied state, no backend call', as
 });
 
 // ---------------------------------------------------------------------------
-// Android out of scope (§18) — explicit refusal, no fake success
+// Android registration (§5.3/§5.4) — FCM token through the SAME contract
 // ---------------------------------------------------------------------------
 
-test('Android native shell refuses registration (FCM is Phase 4)', async () => {
+test('Android native shell registers with platform:android + FCM token, no Web Push fields (§5.4)', async () => {
   await withEnv({ platform: 'android' }, async ({ fetchCalls }) => {
-    const plugin = makePluginMock();
+    const token = 'f'.repeat(152); // FCM-style token shape — still treated as opaque
+    const plugin = makePluginMock({ token });
     const m = await importNativePush(plugin);
     const result = await m.registerNativePush({ enabled: true });
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'platform-not-supported-yet');
-    assert.equal(plugin.calls.register, 0, 'APNs never invoked on Android');
-    assert.equal(fetchCalls.length, 0);
+    assert.equal(result.ok, true, 'Android registration succeeds via the generalized client');
+    assert.equal(result.state.platform, 'android');
+    assert.equal(plugin.calls.register, 1, 'Capacitor register() invoked once');
+    assert.equal(fetchCalls.length, 1, 'exactly one backend registration call');
+    const body = fetchCalls[0].opts;
+    assert.match(fetchCalls[0].url, /\/api\/push\/register$/);
+    assert.equal(body.platform, 'android');
+    assert.equal(body.token, token);
+    assert.ok(body.deviceKey, 'deviceKey present');
+    assert.ok(body.timezone, 'IANA timezone present');
+    // §5.4 hard rule: NO Web Push structures for native Android.
+    assert.equal('endpoint' in body, false);
+    assert.equal('p256dh' in body, false);
+    assert.equal('auth' in body, false);
+  });
+});
+
+test('Android diagnostics report the FCM transport', async () => {
+  await withEnv({ platform: 'android' }, async () => {
+    const plugin = makePluginMock();
+    const m = await importNativePush(plugin);
+    const d = await m.nativePushDiagnostics();
+    assert.equal(d.platform, 'android');
+    assert.equal(d.transport, 'fcm');
+    assert.equal(d.pluginAvailable, true);
   });
 });
 

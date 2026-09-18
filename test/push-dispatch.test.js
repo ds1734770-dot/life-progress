@@ -90,7 +90,9 @@ test('resolveProvider: android → FCM provider (own transport, not Web Push)', 
   const p = resolveProvider('android');
   assert.equal(p.platform, 'android');
   assert.equal(p.transport, 'fcm');
-  assert.equal(p.configured, false);
+  // Phase 5: the REAL FCM provider resolves. Without credentials in this
+  // environment it reports honestly as not configured (never web push).
+  assert.equal(p.isConfigured(), false);
 });
 
 test('resolveProvider: unknown platform → null (caller must reject)', () => {

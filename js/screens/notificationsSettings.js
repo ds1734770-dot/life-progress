@@ -170,19 +170,27 @@ function statusRowMarkup(status) {
 
 /** Map the persisted native push record to a status row. Pure. */
 export function nativeDeliveryStatusFor(pushState, perm, platform) {
-  if (platform !== 'ios') {
-    return { tone: 'muted', icon: 'bell', label: 'Native notifications come to Android in a later update', detail: 'Reminders will arrive through FCM once that phase ships.' };
+  // §5.6: every platform sees its OWN transport vocabulary — never iOS
+  // instructions on Android, never Web Push concepts in either.
+  if (platform !== 'ios' && platform !== 'android') {
+    return { tone: 'muted', icon: 'bell', label: 'Native notifications are not available on this platform', detail: 'Reminders are unavailable in this shell.' };
   }
+  const viaNative = platform === 'android'
+    ? 'Reminders arrive through Firebase Cloud Messaging — even when the app is closed.'
+    : 'Reminders arrive through Apple Push — even when the app is closed.';
+  const deniedHint = platform === 'android'
+    ? 'Allow notifications for Life Progress in Android Settings to receive reminders.'
+    : 'Allow notifications for Life Progress in iOS Settings to receive reminders.';
   if (perm === 'denied') {
-    return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for Life Progress in iOS Settings to receive reminders.' };
+    return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: deniedHint };
   }
   switch (pushState?.status) {
     case 'active':
-      return { tone: 'ok', icon: 'check', label: 'Notifications active', detail: 'Reminders arrive through Apple Push — even when the app is closed.' };
+      return { tone: 'ok', icon: 'check', label: 'Notifications active', detail: viaNative };
     case 'pending':
       return { tone: 'warn', icon: 'refresh', label: 'Finishing setup…', detail: 'Your reminders are saved and will register when the server is reachable.' };
     case 'denied':
-      return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for Life Progress in iOS Settings to receive reminders.' };
+      return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: deniedHint };
     case 'error':
       return { tone: 'warn', icon: 'alert', label: 'Couldn\u2019t finish setting up notifications', detail: pushState?.reason || 'Try again from the Reminders toggle below.' };
     case 'off':
@@ -537,7 +545,7 @@ async function renderNotificationsNative(root, host, prefs) {
             <div class="settings-row-title">Reminders</div>
             <div class="settings-row-sub" id="notif-perm-note">${
               perm === 'granted' ? 'Permission granted — reminders follow your settings.'
-              : perm === 'denied' ? 'Notifications are blocked in iOS Settings.'
+              : perm === 'denied' ? `Notifications are blocked in ${platform === 'android' ? 'Android' : 'iOS'} Settings.`
               : 'Permission is requested only when you turn reminders on.'
             }</div>
           </div>
@@ -577,7 +585,7 @@ async function renderNotificationsNative(root, host, prefs) {
         </button>
       </div>
       ${prefs.enabled && perm === 'denied'
-        ? `<div class="notif-denied-note">Reminders are on, but notifications are disabled for Life Progress. Allow them in iOS Settings.</div>`
+        ? `<div class="notif-denied-note">Reminders are on, but notifications are disabled for Life Progress. Allow them in ${platform === 'android' ? 'Android' : 'iOS'} Settings.</div>`
         : ''}
     </section>`;
 }
@@ -597,7 +605,7 @@ async function toggleNotificationsNative(root, host) {
     } else if (reg.state?.status === 'pending') {
       ui.toast('Reminders saved — will register when the server is reachable', 'info');
     } else if (reg.state?.status === 'denied') {
-      ui.toast('Notifications are disabled in iOS Settings.', 'info');
+      ui.toast(`Notifications are disabled in ${getPlatform() === 'android' ? 'Android' : 'iOS'} Settings.`, 'info');
     } else if (reg.reason === 'platform-not-supported-yet') {
       ui.toast('Native notifications come to Android in a later update.', 'info');
     } else {
@@ -623,7 +631,7 @@ async function sendTestNative(root, host) {
   } else if (result.reason === 'not-registered') {
     ui.toast('Notifications aren’t active yet — turn reminders on first.', 'info');
   } else if (String(result.reason || '').includes('not configured')) {
-    ui.toast('The notification server isn’t set up for Apple Push yet.', 'info');
+    ui.toast(`The notification server isn’t set up for ${getPlatform() === 'android' ? 'Firebase' : 'Apple Push'} yet.`, 'info');
   } else {
     ui.toast('The test couldn’t be delivered. Check the server connection.', 'info');
   }

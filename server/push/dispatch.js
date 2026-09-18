@@ -24,6 +24,7 @@
  */
 import { sendPushMessage } from './webpush.js';
 import { apnsProvider } from './apns.js';
+import { fcmProvider } from './fcm.js';
 import { OUTCOME, makeResult, PLATFORMS } from './outcomes.js';
 
 // Phase 2 compatibility: OUTCOME/makeResult/PLATFORMS moved to the leaf
@@ -101,22 +102,26 @@ function apnsProviderFor(deps = {}) {
 // Providers: android — declared, NOT implemented (Phase 4) (§2/§18)
 // ---------------------------------------------------------------------------
 
-/** FCM stays an honest "not configured yet" until its phase (§18). */
-function unconfiguredFcmProvider() {
-  return {
-    platform: 'android',
-    transport: 'fcm',
-    configured: false,
-    async send() {
-      return makeResult(OUTCOME.NOT_CONFIGURED, {
-        provider: 'fcm',
-        reason: 'FCM delivery is not implemented yet (Phase 4) — native device NOT sent via Web Push',
-      });
-    },
-  };
-}
+// ---------------------------------------------------------------------------
+// Providers: android — FCM (V2.0 Phase 5)
+// ---------------------------------------------------------------------------
 
-const FCM_PROVIDER = unconfiguredFcmProvider();
+/**
+ * deps.fcm overrides the FCM provider wholesale (tests inject mocks).
+ * deps.fcmConfig / deps.fcmTransport / deps.now flow into fcmProvider().
+ * Unlike APNs, no separate Node transport adapter is needed: Google's
+ * endpoint accepts HTTP/1.1, so BOTH runtimes use global fetch. Without
+ * overrides the REAL provider is used and reads its credentials from the
+ * runtime environment — never from code (§5.2/§17).
+ */
+function fcmProviderFor(deps = {}) {
+  if (deps.fcm) return deps.fcm;
+  return fcmProvider({
+    configSource: deps.env,
+    transport: deps.fcmTransport,
+    now: deps.now,
+  });
+}
 
 /**
  * Explicit provider resolution — the ONLY place platform→provider is decided.
@@ -126,7 +131,7 @@ export function resolveProvider(platform, deps = {}) {
   switch (platform) {
     case 'web': return webPushProvider(deps);
     case 'ios': return apnsProviderFor(deps);
-    case 'android': return FCM_PROVIDER;
+    case 'android': return fcmProviderFor(deps);
     default: return null;
   }
 }
