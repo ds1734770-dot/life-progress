@@ -15,6 +15,7 @@
 
 import * as notif from '../notifications.js';
 import * as ui from '../ui.js';
+import { isNative, getPlatform } from '../platform.js';
 
 const pushClient = () => import('../pushClient.js');
 
@@ -40,12 +41,12 @@ export function mountNotifications(root) {
   if (!host) return;
   renderNotifications(root, host);
   ui.bindActions(host, {
-    'notif-toggle': () => toggleNotifications(root, host),
+    'notif-toggle': () => (isNative() ? toggleNotificationsNative(root, host) : toggleNotifications(root, host)),
     'notif-category': (d) => toggleCategory(root, host, d.category),
     'notif-time': (d) => openReminderTimeSheet(root, host, d.category),
     'notif-quiet': () => openQuietHoursSheet(root, host),
-    'notif-test': () => sendTest(root, host),
-    'notif-diagnostics': () => openDiagnosticsSheet(host),
+    'notif-test': () => (isNative() ? sendTestNative(root, host) : sendTest(root, host)),
+    'notif-diagnostics': () => (isNative() ? openNativeDiagnosticsSheet(host) : openDiagnosticsSheet(host)),
   });
 }
 
@@ -160,6 +161,37 @@ function statusRowMarkup(status) {
 }
 
 // ---------------------------------------------------------------------------
+// V2.0 Phase 3 — NATIVE iOS status (§12). Deliberately separate from
+// deliveryStatusFor(): Web Push concepts (service worker, Home Screen
+// install, VAPID) are meaningless inside the native shell and are never
+// shown there. Every state is honest — 'active' only after the backend
+// confirmed the APNs token.
+// ---------------------------------------------------------------------------
+
+/** Map the persisted native push record to a status row. Pure. */
+export function nativeDeliveryStatusFor(pushState, perm, platform) {
+  if (platform !== 'ios') {
+    return { tone: 'muted', icon: 'bell', label: 'Native notifications come to Android in a later update', detail: 'Reminders will arrive through FCM once that phase ships.' };
+  }
+  if (perm === 'denied') {
+    return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for Life Progress in iOS Settings to receive reminders.' };
+  }
+  switch (pushState?.status) {
+    case 'active':
+      return { tone: 'ok', icon: 'check', label: 'Notifications active', detail: 'Reminders arrive through Apple Push — even when the app is closed.' };
+    case 'pending':
+      return { tone: 'warn', icon: 'refresh', label: 'Finishing setup…', detail: 'Your reminders are saved and will register when the server is reachable.' };
+    case 'denied':
+      return { tone: 'warn', icon: 'alert', label: 'Notifications are disabled', detail: 'Allow notifications for Life Progress in iOS Settings to receive reminders.' };
+    case 'error':
+      return { tone: 'warn', icon: 'alert', label: 'Couldn\u2019t finish setting up notifications', detail: pushState?.reason || 'Try again from the Reminders toggle below.' };
+    case 'off':
+    default:
+      return { tone: 'muted', icon: 'bell', label: 'Notifications are ready to set up', detail: 'Turn reminders on below to activate them.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -169,6 +201,12 @@ async function renderNotifications(root, host) {
     prefs = await notif.getNotificationPrefs();
   } catch {
     host.replaceChildren();
+    return;
+  }
+  // V2.0 Phase 3 — native iOS renders its own honest status block; all Web
+  // Push concepts (service worker, install, VAPID) stay web-only (§12).
+  if (isNative()) {
+    await renderNotificationsNative(root, host, prefs);
     return;
   }
   const perm = notif.permissionState();
@@ -444,4 +482,188 @@ async function sendTest(root, host) {
     ui.toast('Permission not granted — reminders stay off.', 'info');
   }
   renderNotifications(root, host);
+}
+
+// ===========================================================================
+// V2.0 Phase 3 — NATIVE iOS path (§12). Mirrors the web functions above but
+// uses js/nativePush.js; Web Push UI concepts never appear on native.
+// ===========================================================================
+
+const nativePushMod = () => import('../nativePush.js');
+
+async function renderNotificationsNative(root, host, prefs) {
+  const platform = getPlatform();
+  const nativeMod = await nativePushMod();
+  const pushState = await nativeMod.currentNativePushState().catch(() => ({ status: 'off' }));
+  const perm = await nativeMod.nativePermissionState();
+  const status = nativeDeliveryStatusFor(pushState, perm, platform);
+
+  const categoryRows = notif.CATEGORIES.map((c) => {
+    const meta = CATEGORY_META[c];
+    const on = prefs.categories[c];
+    const timeRow = TIMED_CATEGORIES.includes(c)
+      ? `<button class="notif-time-row pressable" data-action="notif-time" data-category="${c}"
+             aria-label="Reminder time for ${meta.label}, currently ${notif.formatTime12h(prefs.times[c])}">
+           <span>Reminder time</span>
+           <span class="notif-time-value">${notif.formatTime12h(prefs.times[c])}</span>
+         </button>`
+      : '';
+    return `
+      <div class="notif-category${on ? '' : ' off'}">
+        <div class="settings-row">
+          <div class="settings-row-icon">${ui.icon(meta.icon, 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">${meta.label}</div>
+            <div class="settings-row-sub">${meta.sub}</div>
+          </div>
+          <button class="switch${on ? ' on' : ''}" role="switch" aria-checked="${on}"
+                  aria-label="${meta.label} reminders" data-action="notif-category" data-category="${c}"></button>
+        </div>
+        ${on ? timeRow : ''}
+      </div>`;
+  }).join('');
+
+  host.innerHTML = `
+    <section class="section stagger">
+      <h3 class="section-title" style="font-size:var(--fs-lg)">Notifications</h3>
+      <div class="muted" style="font-size:var(--fs-xs);margin:-2px 2px 10px">
+        Stay consistent without the noise — only reminders you actually need.
+      </div>
+      <div class="settings-group">
+        ${prefs.enabled ? statusRowMarkup(status) : ''}
+        <div class="settings-row">
+          <div class="settings-row-icon" style="background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)">${ui.icon('bell', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Reminders</div>
+            <div class="settings-row-sub" id="notif-perm-note">${
+              perm === 'granted' ? 'Permission granted — reminders follow your settings.'
+              : perm === 'denied' ? 'Notifications are blocked in iOS Settings.'
+              : 'Permission is requested only when you turn reminders on.'
+            }</div>
+          </div>
+          <button class="switch${prefs.enabled ? ' on' : ''}" role="switch" aria-checked="${prefs.enabled}"
+                  aria-label="Notifications" data-action="notif-toggle"></button>
+        </div>
+        ${prefs.enabled
+          ? `<div class="notif-categories">
+               ${categoryRows}
+               <div class="settings-row">
+                 <div class="settings-row-icon">${ui.icon('moon', 18)}</div>
+                 <div class="settings-row-main">
+                   <div class="settings-row-title">Quiet hours</div>
+                   <div class="settings-row-sub">No reminders during this window</div>
+                 </div>
+                 <button class="btn btn-ghost btn-sm" data-action="notif-quiet" aria-label="Edit quiet hours">
+                   ${notif.formatTime12h(prefs.quietStart)} – ${notif.formatTime12h(prefs.quietEnd)}
+                 </button>
+               </div>
+             </div>
+             <div class="settings-row">
+               <div class="settings-row-icon">${ui.icon('send', 18)}</div>
+               <div class="settings-row-main">
+                 <div class="settings-row-title">Try it now</div>
+                 <div class="settings-row-sub">Send a test notification</div>
+               </div>
+               <button class="btn btn-ghost btn-sm" data-action="notif-test">Send</button>
+             </div>`
+          : ''}
+        <button class="settings-row pressable" data-action="notif-diagnostics" style="text-align:left;background:transparent;border:none;width:100%" aria-label="Open notification diagnostics">
+          <div class="settings-row-icon">${ui.icon('alert', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Diagnostics</div>
+            <div class="settings-row-sub">Check notification setup on this device</div>
+          </div>
+          ${ui.icon('chevron-right', 18)}
+        </button>
+      </div>
+      ${prefs.enabled && perm === 'denied'
+        ? `<div class="notif-denied-note">Reminders are on, but notifications are disabled for Life Progress. Allow them in iOS Settings.</div>`
+        : ''}
+    </section>`;
+}
+
+/** Native master toggle — requests iOS permission from THIS tap only. */
+async function toggleNotificationsNative(root, host) {
+  const prefs = await notif.getNotificationPrefs();
+  const enabling = !prefs.enabled;
+  if (enabling) {
+    ui.toast('Setting up notifications…', 'info');
+    const nextPrefs = await notif.saveNotificationPrefs({ enabled: true });
+    const nativeMod = await nativePushMod();
+    const reg = await nativeMod.registerNativePush(nextPrefs).catch((err) => ({ ok: false, state: { status: 'error', reason: String(err?.message || err) } }));
+    ui.haptic();
+    if (reg.ok) {
+      ui.toast('Notifications active', 'success');
+    } else if (reg.state?.status === 'pending') {
+      ui.toast('Reminders saved — will register when the server is reachable', 'info');
+    } else if (reg.state?.status === 'denied') {
+      ui.toast('Notifications are disabled in iOS Settings.', 'info');
+    } else if (reg.reason === 'platform-not-supported-yet') {
+      ui.toast('Native notifications come to Android in a later update.', 'info');
+    } else {
+      ui.toast('Reminders saved locally, but activation failed.', 'info');
+    }
+    renderNotifications(root, host);
+    return;
+  }
+  await notif.saveNotificationPrefs({ enabled: false });
+  const nativeMod = await nativePushMod();
+  await nativeMod.disableNativePush().catch(() => {});
+  ui.haptic();
+  ui.toast('Reminders off', 'info');
+  renderNotifications(root, host);
+}
+
+/** Native test notification — real path through APNs, honestly reported. */
+async function sendTestNative(root, host) {
+  const nativeMod = await nativePushMod();
+  const result = await nativeMod.sendNativeTestPush();
+  if (result.ok) {
+    ui.toast('Test sent — check your notifications', 'success');
+  } else if (result.reason === 'not-registered') {
+    ui.toast('Notifications aren’t active yet — turn reminders on first.', 'info');
+  } else if (String(result.reason || '').includes('not configured')) {
+    ui.toast('The notification server isn’t set up for Apple Push yet.', 'info');
+  } else {
+    ui.toast('The test couldn’t be delivered. Check the server connection.', 'info');
+  }
+  renderNotifications(root, host);
+}
+
+/** Native diagnostics — states only, never tokens or credentials (§12). */
+async function openNativeDiagnosticsSheet(host) {
+  void host;
+  const nativeMod = await nativePushMod();
+  const d = await nativeMod.nativePushDiagnostics();
+  const line = (label, value) => {
+    const good = value === true || value === 'granted' || value === 'active' || value === 'reachable';
+    const bad = value === false || /unavailable|unreachable|error|denied|off/i.test(String(value));
+    const color = good ? 'var(--success, #2fbf71)' : bad ? 'var(--warning)' : 'var(--text-2)';
+    return `<div class="settings-row" style="padding-block:8px">
+      <div class="settings-row-main">
+        <div class="settings-row-title" style="font-size:var(--fs-sm)">${label}</div>
+      </div>
+      <span style="font-weight:700;font-size:var(--fs-sm);color:${color}">${typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}</span>
+    </div>`;
+  };
+  ui.openSheet((close) => {
+    const wrap = ui.el('div', { class: 'flex-col', style: { gap: '6px' } });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Notification diagnostics'));
+    wrap.append(ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-sm)', lineHeight: 1.6 } },
+      'Observed on this device only. Share this screen if reminders don’t arrive.'));
+    const box = ui.el('div', { class: 'settings-group', style: { marginTop: '8px' } });
+    box.innerHTML = [
+      line('Platform', d.platform),
+      line('Native app', d.native),
+      line('Push plugin available', d.pluginAvailable),
+      line('Notification permission', d.permission),
+      line('Device token received', d.tokenReceived),
+      line('Registration', d.registration),
+      line('Notification server', d.backendReachable),
+    ].join('');
+    const done = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button', style: { marginTop: '10px' } }, 'Done');
+    done.addEventListener('click', () => close());
+    wrap.append(box, done);
+    return wrap;
+  });
 }

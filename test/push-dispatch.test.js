@@ -81,7 +81,9 @@ test('resolveProvider: ios → APNs provider (own transport, not Web Push)', () 
   const p = resolveProvider('ios');
   assert.equal(p.platform, 'ios');
   assert.equal(p.transport, 'apns');
-  assert.equal(p.configured, false);
+  // Phase 3: the REAL APNs provider resolves. With no credentials in the
+  // environment it reports honestly as not configured (never web push).
+  assert.equal(p.isConfigured(), false);
 });
 
 test('resolveProvider: android → FCM provider (own transport, not Web Push)', () => {
@@ -133,7 +135,7 @@ test('ios dispatch returns not_configured — never sent via Web Push (§15.2/15
   const r = await dispatchNotification(device, '{}', { vapid: VAPID, sendPushMessage: send });
   assert.equal(r.outcome, OUTCOME.NOT_CONFIGURED);
   assert.equal(r.provider, 'apns');
-  assert.match(r.reason, /not implemented/i);
+  assert.match(r.reason, /not configured/i, 'Phase 3: real APNs provider, no credentials in tests');
   assert.equal(send.calls.length, 0, 'Web Push sender must not be touched for iOS');
 });
 

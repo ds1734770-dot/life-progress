@@ -23,17 +23,13 @@
  *    encryption, VAPID, fresh salt and ephemeral keys stay byte-compatible.
  */
 import { sendPushMessage } from './webpush.js';
+import { apnsProvider } from './apns.js';
+import { OUTCOME, makeResult, PLATFORMS } from './outcomes.js';
 
-/** Typed provider outcomes (§9). Exported for tests and future callers. */
-export const OUTCOME = Object.freeze({
-  DELIVERED: 'delivered',
-  GONE: 'gone', // subscription/token invalid forever (Web Push 404/410, APNs BadDeviceToken, FCM UNREGISTERED)
-  TRANSIENT: 'transient_failure', // retry later (network, 429, 5xx)
-  PERMANENT: 'permanent_failure', // keep the record, stop retrying until something changes
-  NOT_CONFIGURED: 'not_configured', // provider known but credentials/implementation absent
-});
-
-export const PLATFORMS = Object.freeze(['web', 'ios', 'android']);
+// Phase 2 compatibility: OUTCOME/makeResult/PLATFORMS moved to the leaf
+// module server/push/outcomes.js (Phase 3) so providers can share them
+// without an import cycle. Re-exports keep every existing import working.
+export { OUTCOME, makeResult, PLATFORMS };
 
 /**
  * Normalize a stored/incoming platform value. Legacy records (and legacy
@@ -43,11 +39,6 @@ export const PLATFORMS = Object.freeze(['web', 'ios', 'android']);
 export function normalizePlatform(platform) {
   if (platform === undefined || platform === null || platform === '') return 'web';
   return PLATFORMS.includes(platform) ? platform : null;
-}
-
-/** Uniform result shape every provider returns. */
-export function makeResult(outcome, extra = {}) {
-  return { outcome, ...extra };
 }
 
 // ---------------------------------------------------------------------------
@@ -87,26 +78,45 @@ export function webPushProvider(deps = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Providers: ios / android — declared, NOT implemented (Phase 3/4) (§2)
+// Provider: ios — APNs (V2.0 Phase 3)
 // ---------------------------------------------------------------------------
 
-/** Native providers share one honest "not configured yet" behavior. */
-function unconfiguredNativeProvider(platform, transport, phase) {
+/**
+ * deps.apns overrides the APNs provider wholesale (tests inject mocks).
+ * deps.apnsConfig / deps.apnsTransport / deps.now flow into apnsProvider()
+ * (transport injection: Workers → global fetch, Node → node:http2 adapter).
+ * Without overrides the REAL provider is used and reads its credentials
+ * from the runtime environment — never from code (§3/§17).
+ */
+function apnsProviderFor(deps = {}) {
+  if (deps.apns) return deps.apns;
+  return apnsProvider({
+    configSource: deps.env,
+    transport: deps.apnsTransport,
+    now: deps.now,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Providers: android — declared, NOT implemented (Phase 4) (§2/§18)
+// ---------------------------------------------------------------------------
+
+/** FCM stays an honest "not configured yet" until its phase (§18). */
+function unconfiguredFcmProvider() {
   return {
-    platform,
-    transport,
+    platform: 'android',
+    transport: 'fcm',
     configured: false,
     async send() {
       return makeResult(OUTCOME.NOT_CONFIGURED, {
-        provider: transport,
-        reason: `${transport} delivery is not implemented yet (${phase}) — native device NOT sent via Web Push`,
+        provider: 'fcm',
+        reason: 'FCM delivery is not implemented yet (Phase 4) — native device NOT sent via Web Push',
       });
     },
   };
 }
 
-const APNS_PROVIDER = unconfiguredNativeProvider('ios', 'apns', 'Phase 3');
-const FCM_PROVIDER = unconfiguredNativeProvider('android', 'fcm', 'Phase 4');
+const FCM_PROVIDER = unconfiguredFcmProvider();
 
 /**
  * Explicit provider resolution — the ONLY place platform→provider is decided.
@@ -115,7 +125,7 @@ const FCM_PROVIDER = unconfiguredNativeProvider('android', 'fcm', 'Phase 4');
 export function resolveProvider(platform, deps = {}) {
   switch (platform) {
     case 'web': return webPushProvider(deps);
-    case 'ios': return APNS_PROVIDER;
+    case 'ios': return apnsProviderFor(deps);
     case 'android': return FCM_PROVIDER;
     default: return null;
   }

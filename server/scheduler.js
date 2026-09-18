@@ -31,6 +31,7 @@
  */
 import { claimOccurrence, listSubscriptions, markSubscriptionOutcome, hasOccurrence, updateOccurrence } from './store.js';
 import { dispatchNotification, OUTCOME } from './push/dispatch.js';
+import { apnsNodeTransport } from './push/nodeHttp2.js';
 import { nextDailyOccurrence } from '../js/timeCore.js';
 import {
   GRACE_MS,
@@ -63,7 +64,9 @@ async function deliverOccurrence(sub, occ, vapid) {
   const result = await dispatchNotification(
     { platform: sub.platform, endpoint: sub.endpoint, keys: sub.keys, token: sub.token },
     payload,
-    { vapid }
+    // Node context: APNs needs the node:http2 transport (Workers uses its
+    // own HTTP/2-capable fetch inside the DO). See server/push/apns.js (§5).
+    { vapid, env: process.env, apnsTransport: apnsNodeTransport }
   );
   if (result.outcome === OUTCOME.DELIVERED) {
     await markSubscriptionOutcome(sub.deviceKey, { ok: true });

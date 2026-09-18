@@ -163,6 +163,12 @@ export class LPPushDO {
     this.state = state;
     this.env = env;
     this.sendPushMessage = deps.sendPushMessage || sendPushMessage;
+    // V2.0 Phase 3 — APNs test/override seam, mirroring the sendPushMessage
+    // injection: `apns` replaces the provider wholesale, `apnsTransport`
+    // replaces only its HTTP layer ( Workers default = global fetch, which
+    // negotiates HTTP/2). Undefined in production → dispatcher defaults.
+    this.apns = deps.apns;
+    this.apnsTransport = deps.apnsTransport;
     // Test-only injected clock (§27): production uses the real instant at
     // every wake; tests pin `now` so nothing depends on wall-clock time.
     this.now = deps.now || (() => Date.now());
@@ -316,7 +322,7 @@ export class LPPushDO {
     const result = await dispatchNotification(
       { platform: row.platform, endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth }, token: row.token },
       payload,
-      { vapid: this.#vapid(), sendPushMessage: this.sendPushMessage }
+      { vapid: this.#vapid(), sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport }
     );
     if (result.outcome === OUTCOME.DELIVERED) {
       this.#markOutcome(row.device_key, true);
@@ -434,7 +440,7 @@ export class LPPushDO {
         const result = await dispatchNotification(
           { platform: sub.platform, endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth }, token: sub.token },
           payload,
-          { vapid, sendPushMessage: this.sendPushMessage }
+          { vapid, sendPushMessage: this.sendPushMessage, env: this.env, now: this.now, apns: this.apns, apnsTransport: this.apnsTransport }
         );
         if (result.outcome === OUTCOME.DELIVERED) {
           this.#setOccurrence(occ.occurrenceId, { status: 'delivered', sent_at: Date.now() });

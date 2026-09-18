@@ -1,6 +1,6 @@
 # Native App Migration — Architecture & Decision Record
 
-**Status:** Phase 1 complete (scaffolding + platform abstraction). Native push (APNs/FCM) is **not** implemented yet.
+**Status:** Phase 3 complete (Capacitor scaffolding → multi-platform dispatcher + DO schema → iOS APNs provider + native client). FCM/Android is **not** implemented yet.
 **Started:** 2026-09-17 · Branch: `main`
 
 ---
@@ -139,3 +139,116 @@ npx cap sync          # www/ → ios/App/App/public + android assets
 npm run cap:open:ios  # Xcode
 npm run cap:open:android  # Android Studio
 ```
+
+## 10. Phase 2 — multi-platform delivery foundation (complete)
+
+- `server/push/dispatch.js`: `dispatchNotification(device, payload, deps)` —
+  the single seam between the scheduler and platform providers.
+  `resolveProvider()`: `web`→Web Push, `ios`→APNs, `android`→FCM,
+  unknown→null (registration rejected). Providers return typed outcomes:
+  `delivered | gone | transient_failure | permanent_failure | not_configured`.
+  Provider throws are caught → transient; a tick can never crash.
+- `server/push/http.js`: platform-aware validation. Legacy bodies (no
+  `platform`) validate byte-identically → `web`. Native bodies require a
+  `token` and no Web Push fields; unknown platforms are rejected, never coerced.
+- `cloudflare/do.js`: additive, idempotent `migrateSchema()` — `PRAGMA
+  table_info` detection → `ALTER TABLE ADD COLUMN platform TEXT NOT NULL
+  DEFAULT 'web'` / `token TEXT` (try-ALTER fallback if PRAGMA is ever
+  unavailable). No table rebuild; existing rows become `platform='web',
+  token=NULL` and keep delivering without re-registration.
+- `server/scheduler.js` / `server/api.js`: same dispatcher, same typed
+  outcomes; legacy result shape preserved so retry bookkeeping is untouched.
+- Web Push crypto (`server/push/webpush.js` — RFC 8291/8188/8292) and
+  `server/push/domain.js` remain byte-identical.
+
+## 11. Phase 3 — iOS APNs native delivery (complete in code; device testing pending)
+
+### Delivery path
+
+```
+DO alarm → occurrence → dispatchNotification
+  → resolveProvider('ios') → server/push/apns.js
+  → ES256 JWT (token auth) → HTTP/2 api.push.apple.com
+  → apns-topic = bundle ID → alert push, priority 10
+  → typed outcome → existing occurrence bookkeeping
+```
+
+### APNs provider (`server/push/apns.js`)
+
+- **Token-based auth only** — ES256 JWT signed with the Apple `.p8` key on
+  raw WebCrypto: header `{alg:'ES256', kid:APNS_KEY_ID}`, claims
+  `{iss:APNS_TEAM_ID, iat:now}`. No certificates. Node adapters reuse the
+  same WebCrypto path (Node ≥ 16 `crypto.subtle`), so JWT logic is shared.
+- **Payload transform**: the dispatcher hands providers the shared minimal
+  payload (`buildPushPayload`); the provider wraps it for APNs — `aps`
+  alert copy comes from the SAME copy table as the service worker
+  (`js/swPush.js`), so wording stays in sync; `route` goes into `userInfo`
+  for tap deep links. No private user data added.
+- **Response mapping**: 200→delivered · 400 BadDeviceToken / 410
+  Unregistered→gone · 429/5xx→transient · other 4xx→permanent ·
+  network throw→transient · missing/invalid config→not_configured.
+  Native devices are never sent through Web Push.
+- **Runtime handling**: APNs requires HTTP/2. Workers' global `fetch`
+  negotiates HTTP/2 and is the provider's default transport; Node's global
+  fetch speaks HTTP/1.1, so `server/push/nodeHttp2.js` adapts `node:http2`
+  to the same transport contract. One provider, two runtimes, no duplicated
+  business logic.
+
+### iOS client (`js/nativePush.js`, Capacitor 8 + @capacitor/push-notifications)
+
+- Gated on `js/platform.js`; **inert on web** (test-verified).
+- Flow: checkNotifications → requestPermissions → addListener('registration')
+  → `POST /api/push/register` with `platform:'ios'`, `token`, existing
+  preferences schema (no endpoint/p256dh/auth) → token refresh via the
+  `'registrationError'`+re-register path updates the SAME deviceKey row.
+- Taps: `addListener('pushNotificationActionPerformed')` → `userInfo.route`
+  → existing hash routes (`#/water`, `#/gym`, …), allowlisted; cold start
+  handled (late listener registration), no duplicate navigation.
+- Foreground: notifications are presented while the app is open (Capacitor
+  foreground presentation), consistent with existing copy semantics.
+- Listeners are tracked and cleaned up; a hardened tap handler can never
+  throw during teardown.
+
+### Diagnostics & settings (`js/screens/notificationsSettings.js`)
+
+Native iOS shows honest APNs states (native-available, permission
+not-requested/denied, token-unavailable, backend-pending/registered,
+backend-not-configured). The old web-only PWA message about iOS pausing
+delivery when swiped away is NOT shown in native mode. Web/PWA keeps the
+existing Web Push UI unchanged.
+
+### Honest status
+
+- **No real-device APNs delivery has been verified.** Force-quit/swiped-away
+  behavior can only be claimed solved after the physical iPhone matrix
+  (spec §28) is executed. Xcode build/device run requires a dev machine.
+
+## 12. Manual Apple Developer prerequisites (NOT configured)
+
+Everything below is pending; nothing has been enrolled, created, or uploaded:
+
+1. **Apple Developer Program** membership ($99/yr).
+2. **App ID / Bundle ID** — replace temporary `com.example.lifeprogress`
+   (in `capacitor.config.json` + `ios/App/App.xcodeproj/project.pbxproj`) with
+   the final ID, then `npx cap sync ios`.
+3. **Push Notifications capability** on the App ID; add
+   `aps-environment` entitlement (development first, then production) and
+   `UIBackgroundModes: [remote-notifications]` in `Info.plist` if remote
+   background wake is later needed — alert pushes over APNs do not require it.
+4. **APNs Auth Key (.p8)** — create in the Apple Developer portal (one key
+   covers sandbox + production). Record the **Key ID** and **Team ID**.
+5. **Secrets** (never committed): set via `wrangler secret put` on the
+   Worker — `APNS_KEY_P8` (PEM), `APNS_KEY_ID`, `APNS_TEAM_ID`,
+   `APNS_BUNDLE_ID`, and `APNS_ENV=sandbox|production`. The provider reads
+   only env config and returns honest `not_configured` when unset — safe to
+   deploy before secrets exist.
+6. **Physical iPhone test matrix** — install via Xcode/TestFlight; verify
+   app open / background / locked / swiped away / force-quit / reboot /
+   permission denied-then-granted / tap deep link / quiet hours /
+   duplicates / timezone. Document results here.
+7. **Key rotation/revocation** — revoke in the portal, replace secrets,
+   restart; tokens remain valid (they're device-side). Old JWTs die with
+   the key because provider tokens are minted per-send.
+8. Later: privacy disclosure, icons/splash, App Store metadata.
+
+FCM/Android remains untouched (`not_configured`) until its own phase.

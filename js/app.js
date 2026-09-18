@@ -14,7 +14,7 @@ import { showOnboarding } from './onboarding.js';
 import { playLaunchExperience } from './launch.js';
 import { checkAchievementsNow } from './celebration.js';
 import { runReminderSweep, pruneDeliveryState } from './notifications.js';
-import { isNative } from './platform.js';
+import { isNative, getPlatform } from './platform.js';
 
 async function boot() {
   try {
@@ -60,13 +60,22 @@ async function boot() {
   //   · a reminder enabled while the server was unreachable (pending → active)
   //   · prefs changed while the device was offline
   //   · a subscription the browser replaced since last registration
-  // V2.0 Phase 1 — WEB ONLY: native shells have no Web Push subscription and
-  // get their transport (APNs/FCM) in a later phase; syncing a native shell
-  // into the Web Push backend would create a bogus registration.
+  // V2.0 Phase 1 — WEB ONLY: native shells have no Web Push subscription;
+  // their transport is APNs/FCM via js/nativePush.js (below).
   if (!isNative()) {
     import('./pushClient.js')
       .then(({ syncPushRegistration }) => syncPushRegistration().catch(() => {}))
       .catch(() => {}); // offline/broken storage — local-only mode keeps working
+  }
+
+  // V2.0 Phase 3 — NATIVE iOS ONLY: attach the per-app-run APNs listeners
+  // (tap deep links + token refresh). Registration itself happens only from
+  // the explicit settings toggle; this merely keeps listeners alive on every
+  // native launch so taps route correctly after a cold start (§9/§10).
+  if (isNative() && getPlatform() === 'ios') {
+    import('./nativePush.js')
+      .then(({ attachNativeListenersOnce }) => { attachNativeListenersOnce(); })
+      .catch(() => {});
   }
 }
 

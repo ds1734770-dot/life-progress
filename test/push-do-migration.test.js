@@ -296,12 +296,12 @@ test('iOS tick claims + records honestly, never touches the Web Push sender (§1
   assert.equal(status.devices, 1, 'device kept — the provider may be configured later');
 });
 
-test('iOS testPush reports not-implemented instead of faking a send', async () => {
+test('iOS testPush reports honestly instead of faking a send (Phase 3: not-configured)', async () => {
   const { doInstance, send } = makeDO();
   await doInstance.register(nativeReg());
   const r = await doInstance.testPush({ deviceKey: 'iosdevice00001' });
   assert.equal(r.ok, false);
-  assert.match(r.error, /not implemented/i);
+  assert.match(r.error, /not configured/i, 'APNs credentials absent in tests → honest not-configured');
   assert.equal(send.calls.length, 0);
 });
 

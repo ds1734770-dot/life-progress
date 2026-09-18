@@ -15,6 +15,7 @@ import {
   markSubscriptionOutcome,
 } from './store.js';
 import { dispatchNotification, OUTCOME } from './push/dispatch.js';
+import { apnsNodeTransport } from './push/nodeHttp2.js';
 import { buildPushPayload } from './scheduler.js';
 import {
   corsHeaders,
@@ -155,7 +156,7 @@ export async function handlePushApi(req, res, pathname) {
       const result = await dispatchNotification(
         { platform: sub.platform, endpoint: sub.endpoint, keys: sub.keys, token: sub.token },
         payload,
-        { vapid }
+        { vapid, env: process.env, apnsTransport: apnsNodeTransport }
       );
       if (result.outcome === OUTCOME.DELIVERED) {
         await markSubscriptionOutcome(sub.deviceKey, { ok: true });
