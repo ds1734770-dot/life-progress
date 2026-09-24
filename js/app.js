@@ -68,11 +68,12 @@ async function boot() {
       .catch(() => {}); // offline/broken storage — local-only mode keeps working
   }
 
-  // V2.0 Phase 3 — NATIVE iOS ONLY: attach the per-app-run APNs listeners
-  // (tap deep links + token refresh). Registration itself happens only from
+  // V2.0 Phase 3 / V2.1 Phase 2 — NATIVE (iOS + Android): attach the
+  // per-app-run push listeners (tap deep links + token refresh) and consume
+  // any cold-start notification route. Registration itself happens only from
   // the explicit settings toggle; this merely keeps listeners alive on every
   // native launch so taps route correctly after a cold start (§9/§10).
-  if (isNative() && getPlatform() === 'ios') {
+  if (isNative()) {
     import('./nativePush.js')
       .then(({ attachNativeListenersOnce }) => { attachNativeListenersOnce(); })
       .catch(() => {});

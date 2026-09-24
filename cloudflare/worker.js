@@ -126,7 +126,7 @@ export default {
         const body = await readJson(request);
         const res = await doStub(env).fetch('https://do/test', {
           method: 'POST',
-          body: JSON.stringify({ deviceKey: body?.deviceKey }),
+          body: JSON.stringify({ deviceKey: body?.deviceKey, category: body?.category }),
         });
         return new Response(res.body, { status: res.status, headers: cors });
       }

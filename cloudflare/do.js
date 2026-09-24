@@ -32,6 +32,8 @@
 import { computeNextOccurrences, decideOccurrence, buildPushPayload, ROUTES } from '../server/push/domain.js';
 import { dispatchNotification, OUTCOME } from '../server/push/dispatch.js';
 import { sendPushMessage } from '../server/push/webpush.js';
+// V2.1 — allowlist for per-category test pushes (see testPush()).
+const TEST_CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
 
 /**
  * Alarm cadence (V1.6.4). Production scheduling is driven by a
@@ -311,18 +313,25 @@ export class LPPushDO {
     };
   }
 
-  async testPush({ deviceKey } = {}) {
+  async testPush({ deviceKey, category } = {}) {
     const row = typeof deviceKey === 'string' && deviceKey
       ? this.sql.exec('SELECT * FROM push_subscriptions WHERE device_key = ?', deviceKey).one()
       : null;
     if (!row || row.disabled) {
       return { ok: false, error: 'subscription not found — enable notifications first' };
     }
+    // V2.1 — optional allowlisted category: per-category tests use the REAL
+    // reminder payload shape (kind 'reminder', real copy) so the device
+    // renders exactly what a scheduled reminder renders. Unknown or absent
+    // → the legacy generic test push.
+    const testCategory = TEST_CATEGORIES.includes(category) ? category : null;
     // V2.0 Phase 2 — delivery goes through the platform dispatcher (§2/§10).
     // The row is handed over verbatim; the dispatcher normalizes platform
     // (legacy rows without one are web) and picks the provider.
     const occurrenceId = `${row.device_key}:test:${Date.now()}`;
-    const payload = buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: ROUTES.test });
+    const payload = testCategory
+      ? buildPushPayload({ kind: 'reminder', category: testCategory, occurrenceId, dateKey: '', route: ROUTES[testCategory] })
+      : buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: ROUTES.test });
     const result = await dispatchNotification(
       { platform: row.platform, endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth }, token: row.token },
       payload,

@@ -17,6 +17,12 @@
  * category copy, so a broken context read can never swallow a reminder.
  */
 import { dateKey } from './utils.js';
+// V2.1 — the shared presentation model: category copy, accents, actions and
+// deep links come from ONE source (js/notifyContent.js) so the web fallback,
+// the settings preview, the iOS content extension copy table and Android all
+// agree. The eligibility engine (ELIGIBILITY, via deps) stays the authority
+// for personalized copy; this model is the presentation/fallback layer.
+import { presentationFor, toStaticCopy, presentationCategory } from './notifyContent.js';
 
 // ---------------------------------------------------------------------------
 // Payload validation (§14/§24) — never trust the wire
@@ -80,10 +86,14 @@ export function validatePushPayload(raw) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Static fallback copy (infrastructure-error path only)
-// ---------------------------------------------------------------------------
-
+/**
+ * Static fallback copy (infrastructure-error path only).
+ *
+ * V2.1 — the table itself is UNCHANGED (it is the §24 fallback level 3/4 and
+ * server transports import genericForCategory verbatim), but presentationFor
+ * → toStaticCopy provides the category-aware equivalent used when the
+ * context read succeeded on the client: same wording family, same tone.
+ */
 const GENERIC_COPY = {
   water: { title: 'Time for some water 💧', body: 'A quick sip keeps your day on track.' },
   gym: { title: 'Ready for a workout?', body: 'A short session keeps the rhythm going.' },
@@ -97,14 +107,30 @@ export function genericForCategory(category) {
   return { ...(GENERIC_COPY[category] || { title: 'Life Progress', body: 'Time for a quick check-in.' }), route: routeFor(category), tag: category };
 }
 
-/** Notification options for the SW display path (mirrors buildPayload). */
-export function notificationOptions({ title, body, route, tag }) {
+/**
+ * V2.1 — category-aware static copy built from the shared presentation model
+ * (js/notifyContent.js). Used by the settings test path and any surface that
+ * needs the immersive-experience wording in plain { title, body } shape.
+ * Pure and dependency-free so every transport can call it.
+ */
+export function categoryStaticCopy(category, ctx = {}) {
+  const p = presentationFor(presentationCategory(category), ctx);
+  return toStaticCopy(p) || genericForCategory(category);
+}
+
+/**
+ * Notification options for the SW display path (mirrors buildPayload).
+ * V2.1 — `icon` optionally carries the locally-resolved notification
+ * wallpaper (bundled asset path or blob URL); platforms that support a
+ * notification image render it, everything else falls back to the app icon.
+ */
+export function notificationOptions({ title, body, route, tag, icon }) {
   return {
     title,
     body,
     options: {
       tag: tag || 'life-progress',
-      icon: './icons/icon-192.png',
+      icon: icon || './icons/icon-192.png',
       badge: './icons/icon-192.png',
       data: { route: route || '#/dashboard', app: 'life-progress' },
     },
@@ -132,6 +158,9 @@ export async function processPush(raw, deps) {
     ELIGIBILITY,
     show,
     now = new Date(),
+    // V2.1 — optional wallpaper resolution (SW passes the real one; server
+    // side and unit tests omit it and stay notification-icon-only).
+    resolveWallpaper = null,
   } = deps;
 
   const parsed = validatePushPayload(raw);
@@ -173,8 +202,26 @@ export async function processPush(raw, deps) {
 
   // Context read failure → static copy so a broken read can't swallow the
   // reminder the user asked for. Rare, honest, and never personalized.
+  // V2.1 — the personalized path wraps its copy with the presentation model's
+  // route/tag (identical values — the eligibility engine and the model share
+  // the same allowlisted routes), keeping the display call single-shaped.
+  // Wallpaper resolution is failure-safe (§24): any error degrades to the
+  // standard app-icon notification, never suppressing the reminder.
+  let wallpaperIcon = null;
+  if (resolveWallpaper) {
+    try {
+      const resolved = await resolveWallpaper(p.category, { occurrenceId: p.occurrenceId, dayKey: p.period });
+      wallpaperIcon = resolved?.wallpaper?.custom
+        ? resolved.url || null // caller resolved the local blob to a URL
+        : resolved?.wallpaper?.src || null;
+    } catch {
+      wallpaperIcon = null; // fallback level 3: standard notification
+    }
+  }
   const final = copy || genericForCategory(p.category);
-  await show(notificationOptions({ title: final.title, body: final.body, route: final.route || p.route, tag: final.tag || p.category }));
+  const presented = presentationFor(presentationCategory(p.category), copy ? copy : {});
+  const shownRoute = final.route || presented.route || p.route;
+  await show(notificationOptions({ title: final.title, body: final.body, route: shownRoute, tag: final.tag || p.category, icon: wallpaperIcon }));
 
   // Dedup marker written only AFTER a real display (V1.5 invariant).
   await markDelivered(p.key, p.period, { route: final.route || p.route, source: 'push' });

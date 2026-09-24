@@ -235,10 +235,13 @@ export async function nativePermissionState() {
 
 /**
  * Real-path test notification for native (§24 of the master spec): asks the
- * SERVER to deliver a test through the registered transport (APNs) — the
- * same full chain scheduled reminders use. No local fallback faking it.
+ * SERVER to deliver a test through the registered transport (APNs/FCM) —
+ * the same full chain scheduled reminders use. No local fallback faking it.
+ * V2.1 — optional `category` ('water'|'gym'|…): the server then sends the
+ * REAL reminder payload shape for that category, so the device renders
+ * exactly what a scheduled reminder renders (copy, channel, actions).
  */
-export async function sendNativeTestPush() {
+export async function sendNativeTestPush({ category = null } = {}) {
   const state = await currentNativePushState();
   if (state.status !== 'active' || !state.deviceKey) {
     return { ok: false, via: null, reason: 'not-registered' };
@@ -247,7 +250,7 @@ export async function sendNativeTestPush() {
     const res = await fetch(`${API_BASE()}/api/push/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceKey: state.deviceKey }),
+      body: JSON.stringify({ deviceKey: state.deviceKey, category: category || undefined }),
     });
     if (res.ok) return { ok: true, via: 'push' };
     const data = await res.json().catch(() => ({}));
@@ -320,6 +323,7 @@ export function attachNativeListenersOnce() {
   if (listenersAttached || !isNative()) return;
   if (!NATIVE_PLATFORMS.includes(getPlatform())) return;
   listenersAttached = true;
+  try { consumePendingNativeRoute(); } catch { /* never block listener attach */ }
   capPush().then(({ PushNotifications }) => {
     // Token rotation (§5.5): the OS may refresh the token (APNs on iOS,
     // FCM instance churn on Android); update the SAME device record.
@@ -352,6 +356,117 @@ export function attachNativeListenersOnce() {
       } catch { /* never break the app over a navigation */ }
     });
   }).catch(() => { listenersAttached = false; });
+}
+
+// ---------------------------------------------------------------------------
+// Native appearance sync (V2.1 Phase 2, §3/§9/§21) — mirror the validated
+// appearance + custom photo into the native layer. The web settings remain
+// the source of truth; native is a local mirror for the notification
+// renderers. The custom photo travels ONLY webview → native bridge on this
+// device: never uploaded, never in any payload (§21).
+// ---------------------------------------------------------------------------
+
+let appearancePluginPromise = null;
+
+const APPEARANCE_METHODS = ['syncAppearance', 'syncCustomPhoto', 'removeCustomPhoto', 'consumeNotificationRoute'];
+
+async function appearanceSyncPlugin() {
+  if (globalThis.__LP_APPEARANCE_PLUGIN_OVERRIDE__) return globalThis.__LP_APPEARANCE_PLUGIN_OVERRIDE__;
+  // Real bridge only: native shells expose window.Capacitor; Node tests and
+  // plain browsers must never reach the (unimplemented) web proxy — that
+  // would reject asynchronously and pollute callers that fire-and-forget.
+  if (typeof window === 'undefined' || !window.Capacitor) throw new Error('appearance sync unavailable');
+  if (!appearancePluginPromise) {
+    appearancePluginPromise = import('@capacitor/core').then((m) => {
+      const proxy = m.registerPlugin('LPAppearanceSync');
+      // SAFETY: the Capacitor proxy implements a `then` trap. If the proxy
+      // itself ever crosses a promise boundary (await, Promise.resolve), that
+      // trap fires as a plugin method call, throws "not implemented", and
+      // leaves the awaiting code hanging with an unhandled rejection. Wrap
+      // the methods in a PLAIN object so only explicit calls reach the proxy.
+      const safe = {};
+      for (const name of APPEARANCE_METHODS) {
+        safe[name] = (...args) => proxy[name](...args);
+      }
+      return safe;
+    });
+  }
+  return appearancePluginPromise;
+}
+
+/** Mode/id mirroring is cheap and side-effect-free — best effort, honest. */
+export async function syncNativeNotificationAppearance(appearance) {
+  if (!isNative() || !NATIVE_PLATFORMS.includes(getPlatform())) return { ok: false, reason: 'unavailable' };
+  try {
+    const plugin = await appearanceSyncPlugin();
+    await plugin.syncAppearance({
+      mode: String(appearance?.mode || 'random'),
+      builtinId: appearance?.builtinId || null,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err) };
+  }
+}
+
+/**
+ * Push the processed custom photo (already downscaled by js/photos.js) into
+ * the native mirror. Blob → data URL happens in the webview; native writes it
+ * to app-local storage. Never transmitted beyond the device.
+ */
+export async function syncNativeCustomWallpaper(blob) {
+  if (!(blob instanceof Blob)) return { ok: false, reason: 'blob required' };
+  if (!isNative() || !NATIVE_PLATFORMS.includes(getPlatform())) return { ok: false, reason: 'unavailable' };
+  try {
+    const plugin = await appearanceSyncPlugin();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('could not read image blob'));
+      reader.readAsDataURL(blob);
+    });
+    await plugin.syncCustomPhoto({ dataUrl });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err) };
+  }
+}
+
+/** Remove the native custom-photo mirror (called alongside the local removal). */
+export async function removeNativeCustomWallpaper() {
+  if (!isNative() || !NATIVE_PLATFORMS.includes(getPlatform())) return { ok: false, reason: 'unavailable' };
+  try {
+    const plugin = await appearanceSyncPlugin();
+    await plugin.removeCustomPhoto();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err) }
+  }
+}
+
+/**
+ * Cold-start deep link (§10): Android parks a notification route in native
+ * storage when the webview is not yet up; the boot path consumes it here.
+ * iOS needs no equivalent — the Capacitor push plugin replays taps through
+ * pushNotificationActionPerformed after launch.
+ */
+async function consumePendingNativeRoute() {
+  // Android only (§10): iOS replays cold-start taps through
+  // pushNotificationActionPerformed, so the native consume is not needed there.
+  if (getPlatform() !== 'android') return;
+  try {
+    const plugin = await appearanceSyncPlugin();
+    const res = await plugin.consumeNotificationRoute();
+    const route = res?.route;
+    if (typeof route === 'string' && /^#\/[a-z]+$/.test(route)) {
+      const loc = typeof window !== 'undefined' ? window?.location : undefined;
+      if (loc) loc.hash = route;
+    }
+  } catch (err) {
+    // Never unhandled: fire-and-forget callers must be safe when the native
+    // side has no LPAppearanceSync implementation (older shells).
+    void err;
+  }
 }
 
 /**

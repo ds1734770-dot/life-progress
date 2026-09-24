@@ -11,6 +11,7 @@ import { dbExportAll, dbImportAll, dbResetAll } from '../db.js';
 import { themeOptions, WORKOUT_TYPES } from '../models.js';
 import { DEFAULT_LAUNCH_QUOTE, LAUNCH_QUOTE_MAX, launchQuote, sanitizeLaunchQuote, avatarMarkup, revokeAvatarUrls } from '../personalization.js';
 import { mountNotifications } from './notificationsSettings.js';
+import { mountNotificationAppearance } from './notificationAppearance.js';
 import * as ui from '../ui.js';
 import { go } from '../router.js';
 
@@ -20,6 +21,7 @@ export async function mount(root, params) {
   render(root, settings);
   refreshAchievementsSub(root);
   mountNotifications(root);
+  mountNotificationAppearance(root);
 }
 
 
@@ -203,6 +205,7 @@ function render(root, settings) {
     </section>
 
     <div id="notif-section"></div>
+    <div id="notif-appearance"></div>
 
     <section class="section stagger">
       <h3 class="section-title" style="font-size:var(--fs-lg)">Data</h3>
@@ -459,6 +462,13 @@ async function exportData() {
     if (settingsRecord && settingsRecord.avatarImage instanceof Blob) {
       settingsRecord.avatarImage = await photos.blobToDataURL(settingsRecord.avatarImage);
     }
+    // V2.1 — notification wallpaper prefs participate in export, but only as
+    // PREFERENCES (§17): bundled assets are not exported, and the custom
+    // photo is device-local — its blob never enters the JSON backup. If an
+    // appearance record somehow carries a blob (defensive), strip it here.
+    const appearanceRecord = dump.data.notificationState?.find((r) => r?.id === 'appearance');
+    if (appearanceRecord) appearanceRecord.recent = appearanceRecord.recent || [];
+    dump.data.notificationState = (dump.data.notificationState || []).filter((r) => r?.id !== 'wallpaper-custom');
     const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -489,6 +499,12 @@ async function importData() {
       danger: true,
     });
     if (!ok) return;
+    // V2.1 — the custom wallpaper photo is device-local (§17/§21): an import
+    // must never pretend to restore it. If an old/hand-edited backup carries
+    // a 'wallpaper-custom' record, strip the blob before it reaches storage.
+    if (Array.isArray(dump.data.notificationState)) {
+      dump.data.notificationState = dump.data.notificationState.filter((r) => r?.id !== 'wallpaper-custom');
+    }
     // V1.1: restore the custom avatar data URL back to a Blob BEFORE the
     // dump is written, so the stored settings record holds a real Blob.
     const settingsRecord = Array.isArray(dump.data.settings) ? dump.data.settings[0] : null;
@@ -529,6 +545,10 @@ async function clearData() {
     await wipePushRegistration().catch(() => {});
     await dbResetAll();
     resetSettings();
+    // V2.1 — wipe also resets the notification wallpaper system (§17):
+    // custom photo + crop metadata + preferences → default Random Background.
+    const notifMod = await import('../notifications.js');
+    await notifMod.resetNotificationAppearance().catch(() => {});
     photos.revokePhotoUrls();
     revokeAvatarUrls();
     ui.toast('All data cleared', 'info');

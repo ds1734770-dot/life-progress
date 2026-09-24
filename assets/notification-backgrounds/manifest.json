@@ -1,0 +1,50 @@
+[
+  {
+    "id": "sunset_peak",
+    "file": "sunset_peak.png"
+  },
+  {
+    "id": "forest_trail",
+    "file": "forest_trail.png"
+  },
+  {
+    "id": "calm_lake",
+    "file": "calm_lake.png"
+  },
+  {
+    "id": "mountain_mist",
+    "file": "mountain_mist.png"
+  },
+  {
+    "id": "night_sky",
+    "file": "night_sky.png"
+  },
+  {
+    "id": "ocean_dusk",
+    "file": "ocean_dusk.png"
+  },
+  {
+    "id": "city_night",
+    "file": "city_night.png"
+  },
+  {
+    "id": "warm_minimal",
+    "file": "warm_minimal.png"
+  },
+  {
+    "id": "cozy_room",
+    "file": "cozy_room.png"
+  },
+  {
+    "id": "sunrise_valley",
+    "file": "sunrise_valley.png"
+  },
+  {
+    "id": "autumn_forest",
+    "file": "autumn_forest.png"
+  },
+  {
+    "id": "training_room",
+    "file": "training_room.png"
+  }
+]

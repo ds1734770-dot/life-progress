@@ -3,7 +3,19 @@
  * Precaches the core assets at install time and serves them cache-first.
  * Cross-origin requests and data URLs are never cached or intercepted.
  */
-const CACHE = 'life-progress-v1.16';
+// V2.1: bumped for the notification appearance modules (notifyContent,
+// notifyWallpapers, notificationAppearance) joining the precache list.
+const CACHE = 'life-progress-v1.17';
+
+// V2.1 — the 12 built-in wallpaper files, mirrored from the registry in
+// js/notifyWallpapers.js (kept as a literal list here so the precache never
+// needs a module import). Parity with the registry is asserted by
+// test/notification-experience.test.js.
+const NOTIFICATION_WALLPAPERS = [
+  'sunset_peak.png', 'forest_trail.png', 'calm_lake.png', 'mountain_mist.png',
+  'night_sky.png', 'ocean_dusk.png', 'city_night.png', 'warm_minimal.png',
+  'cozy_room.png', 'sunrise_valley.png', 'autumn_forest.png', 'training_room.png',
+];
 
 // Relative URLs (no leading slash) so the app deploys at a domain root OR a
 // subpath (e.g. GitHub Pages project sites) without changes.
@@ -36,6 +48,8 @@ const CORE_ASSETS = [
   './js/launch.js',
   './js/personalization.js',
   './js/notifications.js',
+  './js/notifyContent.js',
+  './js/notifyWallpapers.js',
   './js/timeCore.js',
   './js/platform.js',
   './js/nativePush.js',
@@ -43,6 +57,7 @@ const CORE_ASSETS = [
   './js/pushClient.js',
   './assets/launch-bg.png',
   './js/screens/notificationsSettings.js',
+  './js/screens/notificationAppearance.js',
   './js/screens/dashboard.js',
   './js/screens/water.js',
   './js/screens/goals.js',
@@ -75,6 +90,12 @@ const CORE_ASSETS = [
   './vendor/mediapipe/manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  // V2.1 — built-in notification wallpapers (bundled, offline): the service
+  // worker resolves them at PUSH time, when the network may be gone. The
+  // custom user photo is deliberately NOT listed — it lives in IndexedDB and
+  // cannot be read in SW context, so custom mode falls back to the standard
+  // app-icon notification there (never a failure, §24).
+  ...NOTIFICATION_WALLPAPERS.map((f) => `./assets/notification-backgrounds/${f}`),
 ];
 
 self.addEventListener('install', (event) => {
@@ -183,6 +204,12 @@ async function handlePushEvent(event) {
       markDelivered: notif.markDelivered,
       buildReminderContext: notif.buildReminderContext,
       ELIGIBILITY: notif.ELIGIBILITY,
+      // V2.1 — resolve the notification wallpaper locally (bundled asset or
+      // random pick per occurrence). Custom photos cannot be read in SW
+      // context (IndexedDB only) → the resolver returns null there and the
+      // display degrades to the standard app icon, never suppressing the
+      // reminder (§24 fallback hierarchy).
+      resolveWallpaper: notif.resolveNotificationWallpaper,
       show: (n) => self.registration.showNotification(n.title, n.options),
     });
     // Deliberately silent outcomes (invalid payload, gates, "not useful now")

@@ -2521,3 +2521,197 @@
     padding-left: 54px;
   }
 }
+
+/* ===========================================================================
+ * V2.1 — Notification Appearance (Settings → Notification Appearance)
+ * Wallpaper gallery, live preview and crop controls. Accents here are scoped
+ * to this section only — they never leak into the global theme (§8).
+ * =========================================================================== */
+
+/* Mode radio rows */
+.wall-mode-row .wall-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  flex: 0 0 auto;
+  margin-right: 2px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.wall-mode-row.selected .wall-radio {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 4px var(--accent);
+}
+.wall-mode-row .settings-row-main {
+  flex: 1;
+}
+
+/* Built-in gallery — 2-up portrait thumbs (§6) */
+.wall-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+.wall-thumb {
+  position: relative;
+  border: 2px solid transparent;
+  border-radius: var(--r-m);
+  overflow: hidden;
+  padding: 0;
+  background: var(--surface);
+  cursor: pointer;
+  aspect-ratio: 3 / 4;
+}
+.wall-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.wall-thumb.selected {
+  border-color: var(--accent);
+}
+.wall-thumb-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 8px 6px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.65));
+  text-align: left;
+}
+.wall-thumb-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Live preview card (§7) — mirrors the native immersive layout honestly */
+.wall-preview {
+  position: relative;
+  border-radius: var(--r-l, 20px);
+  overflow: hidden;
+  margin: 14px 2px 6px;
+  aspect-ratio: 9 / 14;
+  max-height: 430px;
+  border: 1px solid var(--border);
+}
+.wall-preview-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+.wall-preview-overlay {
+  position: absolute;
+  inset: 0;
+}
+.wall-preview-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 16px;
+  color: #fff;
+  background: rgba(8, 12, 18, 0.18); /* glass/translucent panel (§8) */
+  backdrop-filter: blur(2px);
+}
+.wall-preview-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  opacity: 0.92;
+}
+.wall-preview-kicker {
+  letter-spacing: 0.14em;
+  font-size: 10px;
+  opacity: 0.8;
+}
+.wall-preview-quote {
+  font-size: var(--fs-xs);
+  font-style: italic;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+.wall-preview-title {
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.wall-preview-sub {
+  font-size: var(--fs-sm);
+  opacity: 0.95;
+}
+.wall-preview-progress {
+  font-size: var(--fs-sm);
+  font-weight: 800;
+  color: var(--wall-accent, #8fa3b8);
+  margin-top: 2px;
+}
+.wall-preview-message {
+  font-size: var(--fs-xs);
+  opacity: 0.85;
+  white-space: pre-line;
+}
+.wall-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.wall-btn {
+  flex: 1;
+  text-align: center;
+  padding: 9px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 800;
+}
+.wall-btn-primary { color: #06101c; }
+.wall-btn-secondary {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* Preview category chips */
+.wall-preview-picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 2px 0;
+}
+.wall-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+.wall-chip.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Reduced motion: no transitions in this section (§23) */
+@media (prefers-reduced-motion: reduce) {
+  .wall-thumb, .wall-mode-row .wall-radio, .wall-chip { transition: none; }
+}

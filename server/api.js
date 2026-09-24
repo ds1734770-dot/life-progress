@@ -17,6 +17,8 @@ import {
 import { dispatchNotification, OUTCOME } from './push/dispatch.js';
 import { apnsNodeTransport } from './push/nodeHttp2.js';
 import { buildPushPayload } from './scheduler.js';
+// V2.1 — allowlist for per-category test pushes (see /api/push/test).
+const TEST_CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
 import {
   corsHeaders,
   validateRegistration,
@@ -148,9 +150,16 @@ export async function handlePushApi(req, res, pathname) {
         json(res, 404, { ok: false, error: 'subscription not found — enable notifications first' });
         return true;
       }
+      // V2.1 — optional allowlisted category: per-category test pushes use
+      // the REAL reminder payload shape (kind 'reminder', real copy) so the
+      // device renders exactly what a scheduled reminder renders. Unknown or
+      // absent → the legacy generic test push.
+      const category = TEST_CATEGORIES.includes(body.category) ? body.category : null;
       const vapid = await getVapidConfig();
       const occurrenceId = `${sub.deviceKey}:test:${Date.now()}`;
-      const payload = buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: '#/dashboard' });
+      const payload = category
+        ? buildPushPayload({ kind: 'reminder', category, occurrenceId, dateKey: '', route: ROUTES[category] })
+        : buildPushPayload({ kind: 'test', category: 'test', occurrenceId, dateKey: '', route: '#/dashboard' });
       // V2.0 Phase 2 — the test path uses the same platform dispatcher as
       // the scheduler (§11): no provider logic duplicated here.
       const result = await dispatchNotification(

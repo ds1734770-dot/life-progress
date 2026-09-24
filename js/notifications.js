@@ -23,6 +23,83 @@
 
 import { dbGet, dbPut, dbGetAll, dbDelete, dbClear } from './db.js';
 import { dateKey, daysBetween } from './utils.js';
+// V2.1 — notification appearance (wallpaper system): preferences live in the
+// SAME notificationState store as a sibling record (id 'appearance'); the
+// pure shape guards live in js/notifyWallpapers.js so screens never touch
+// IndexedDB and the selection logic stays unit-testable in Node.
+import { normalizeNotificationAppearance, pickNotificationWallpaper, defaultNotificationAppearance } from './notifyWallpapers.js';
+
+const APPEARANCE_ID = 'appearance';
+const CUSTOM_WALLPAPER_ID = 'wallpaper-custom';
+
+/**
+ * The notification wallpaper record, resolved for one occurrence.
+ * `wallpaper.src` is a local bundled asset path OR `wallpaper.custom` marks
+ * the locally-stored user photo (never transmitted anywhere, §21).
+ */
+export async function getNotificationAppearance() {
+  return normalizeNotificationAppearance(await dbGet(STORE, APPEARANCE_ID));
+}
+
+export async function saveNotificationAppearance(patch) {
+  const current = await getNotificationAppearance();
+  const next = normalizeNotificationAppearance({ ...current, ...patch });
+  await dbPut(STORE, { ...next, id: APPEARANCE_ID });
+  return next;
+}
+
+export function defaultNotificationAppearancePrefs() {
+  return defaultNotificationAppearance();
+}
+
+/**
+ * Resolve the wallpaper for one notification occurrence and persist the
+ * random-mode recent history so the next occurrence avoids repeats (§18).
+ * `seed` should be the occurrenceId (or a stable preview key).
+ */
+export async function resolveNotificationWallpaper(category, { occurrenceId = '', dayKey = dateKey(), rand = Math.random } = {}) {
+  void category; // per-category wallpaper affinity may come later; selection is appearance-driven
+  const appearance = await getNotificationAppearance();
+  const { wallpaper, recent } = pickNotificationWallpaper(appearance, { occurrenceId, dayKey, rand });
+  if (JSON.stringify(recent) !== JSON.stringify(appearance.recent)) {
+    await saveNotificationAppearance({ recent });
+  }
+  return { appearance, wallpaper };
+}
+
+/**
+ * The custom photo's blob comes from the photoReferences store? No — it has
+ * its OWN record in notificationState (id 'wallpaper-custom') holding the
+ * processed local blob + crop. Local-only by construction: it can never be
+ * exported as an image (export writes the preference only) and never leaves
+ * the device (§21).
+ */
+export async function getCustomWallpaperPhoto() {
+  const rec = await dbGet(STORE, CUSTOM_WALLPAPER_ID);
+  if (!rec || !(rec.blob instanceof Blob)) return null;
+  return rec;
+}
+
+/**
+ * Store a processed, downscaled local copy of the user's photo.
+ * The caller (settings screen) does the downscaling/cropping via the same
+ * canvas pipeline js/photos.js uses; this only persists the local result.
+ */
+export async function saveCustomWallpaperPhoto(blob, crop = null) {
+  if (!(blob instanceof Blob)) throw new Error('wallpaper blob required');
+  const rec = { id: CUSTOM_WALLPAPER_ID, blob, crop, updatedAt: Date.now() };
+  await dbPut(STORE, rec);
+  return rec;
+}
+
+export async function removeCustomWallpaperPhoto() {
+  await dbDelete(STORE, CUSTOM_WALLPAPER_ID);
+  const appearance = await getNotificationAppearance();
+  // Removing the photo while custom mode is active falls back to random —
+  // never leave the appearance pointing at an image that no longer exists.
+  if (appearance.mode === 'custom') return saveNotificationAppearance({ mode: 'random', customPhotoId: null });
+  return saveNotificationAppearance({ customPhotoId: null });
+}
 
 // V1.6 — the pure time/quiet-hours core moved to js/timeCore.js so the server
 // scheduler, the service worker and the page share ONE definition. These
@@ -189,13 +266,15 @@ export const DEEP_LINKS = {
  * coalesces same-topic notifications; actions are used when supported.
  * Journal content is NEVER included — privacy by construction.
  */
-export function buildPayload({ title, body, route, tag, actions = [] }) {
+export function buildPayload({ title, body, route, tag, actions = [], icon = null }) {
   return {
     title,
     body,
     options: {
       tag,
-      icon: './icons/icon-192.png',
+      // V2.1 — `icon` optionally carries the locally-resolved notification
+      // wallpaper (bundled asset path or blob URL); absent → app icon.
+      icon: icon || './icons/icon-192.png',
       badge: './icons/icon-192.png',
       data: { route, app: 'life-progress' },
       ...(actions.length ? { actions } : {}),
@@ -464,4 +543,15 @@ export async function pruneDeliveryState(olderThanDays = 30) {
 /** Full-wipe support: remove ALL notification state (prefs + dedup records). */
 export async function clearNotificationState() {
   await dbClear(STORE);
+}
+
+/**
+ * V2.1 — reset the notification wallpaper system to defaults during a full
+ * data wipe (§17): removes the custom photo, crop metadata and preferences,
+ * restoring Random Background. Same store, so clearNotificationState()
+ * already covers the records — this exists for clarity and for tests that
+ * reset appearance without wiping everything.
+ */
+export async function resetNotificationAppearance() {
+  await dbClear(STORE); // appearance + custom photo live in notificationState
 }

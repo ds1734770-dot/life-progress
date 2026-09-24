@@ -16,6 +16,11 @@
 import * as notif from '../notifications.js';
 import * as ui from '../ui.js';
 import { isNative, getPlatform } from '../platform.js';
+// V2.1 — per-category test notifications (§19): each test goes through the
+// REAL display path (web push / native push / local Notification), only the
+// category differs. Presentation copy comes from the shared model.
+import { categoryStaticCopy } from '../swPush.js';
+import { NOTIFY_CATEGORIES } from '../notifyContent.js';
 
 const pushClient = () => import('../pushClient.js');
 
@@ -45,7 +50,8 @@ export function mountNotifications(root) {
     'notif-category': (d) => toggleCategory(root, host, d.category),
     'notif-time': (d) => openReminderTimeSheet(root, host, d.category),
     'notif-quiet': () => openQuietHoursSheet(root, host),
-    'notif-test': () => (isNative() ? sendTestNative(root, host) : sendTest(root, host)),
+    // Third bindActions arg is the target element (dataset lives there).
+    'notif-test': (_d, _e, el) => openTestCategorySheet(root, host, el?.dataset?.category),
     'notif-diagnostics': () => (isNative() ? openNativeDiagnosticsSheet(host) : openDiagnosticsSheet(host)),
   });
 }
@@ -490,6 +496,90 @@ async function sendTest(root, host) {
     ui.toast('Permission not granted — reminders stay off.', 'info');
   }
   renderNotifications(root, host);
+}
+
+// ---------------------------------------------------------------------------
+// V2.1 — Test-mode category sheet (§19): "Try it now" becomes per-category.
+// Each test uses the REAL notification rendering path (push / local / native
+// transport) with the current wallpaper + presentation design — the sheet
+// only picks the category. Never a fake preview standing in for delivery.
+// ---------------------------------------------------------------------------
+
+const TEST_CATEGORIES = NOTIFY_CATEGORIES.filter((c) => c !== 'general');
+
+function openTestCategorySheet(root, host, preset) {
+  void preset;
+  ui.openSheet((close) => {
+    const wrap = ui.el('div', { class: 'flex-col', style: { gap: '8px' } });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Send a test'));
+    wrap.append(ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-sm)', lineHeight: 1.5 } },
+      'Delivers through your real notification path with the current notification appearance.'));
+    const grid = ui.el('div', { class: 'flex-col', style: { gap: '6px', marginTop: '6px' } });
+    for (const category of TEST_CATEGORIES) {
+      const btn = ui.el('button', { class: 'btn btn-ghost btn-block', 'data-category': category }, `Test ${category[0].toUpperCase() + category.slice(1)}`);
+      btn.addEventListener('click', async () => {
+        close();
+        await deliverCategoryTest(category);
+        renderNotifications(root, host);
+      });
+      grid.append(btn);
+    }
+    wrap.append(grid);
+    return wrap;
+  });
+}
+
+/** One real-path category test: local Notification first, then native. */
+async function deliverCategoryTest(category) {
+  if (!isNative() && notif.permissionState() === 'default') {
+    const granted = await notif.requestPermission();
+    if (granted !== 'granted') {
+      ui.toast('Permission not granted — test not sent.', 'info');
+      return;
+    }
+  }
+  // Real context where cheap: current water/goal values so the test shows
+  // the same personalized copy the real reminder would (§19). Failures fall
+  // back to the static presentation copy — never invented numbers.
+  let ctx = {};
+  try { ctx = await notif.buildReminderContext(); } catch { /* static copy */ }
+  const copy = categoryStaticCopy(category, ctxForCategory(category, ctx));
+  if (isNative()) {
+    const nativeMod = await import('../nativePush.js');
+    const result = await nativeMod.sendNativeTestPush({ category }).catch(() => ({ ok: false }));
+    ui.toast(result.ok ? `Test ${category} sent — check your notifications` : 'Native test couldn’t be delivered. Check the server connection.', result.ok ? 'success' : 'info');
+    return;
+  }
+  // V2.1 — resolve the SAME wallpaper the scheduled reminder would (mode,
+  // builtin pin, random pick). Failure-safe: any error degrades to the
+  // standard app-icon notification (§24).
+  let wallpaperIcon = null;
+  try {
+    const resolved = await notif.resolveNotificationWallpaper(category, { occurrenceId: `test-${category}-${Date.now()}`, dayKey: '' });
+    if (resolved?.wallpaper?.custom) {
+      const custom = await notif.getCustomWallpaperPhoto();
+      if (custom?.blob) wallpaperIcon = URL.createObjectURL(custom.blob);
+    } else {
+      wallpaperIcon = resolved?.wallpaper?.src || null;
+    }
+  } catch { /* app-icon fallback */ }
+  const payload = notif.buildPayload({ ...copy, tag: `test-${category}`, icon: wallpaperIcon });
+  const shown = await notif.showNotification(payload);
+  ui.toast(shown ? `Test ${category} sent` : 'Test couldn’t be shown.', shown ? 'success' : 'info');
+}
+
+/** Project the reminder context into presentation-model fields per category. */
+function ctxForCategory(category, ctx) {
+  if (category === 'water' && ctx.waterTarget) {
+    return { waterTotal: ctx.waterTotal, waterTarget: ctx.waterTarget, waterRemaining: ctx.waterRemaining };
+  }
+  if (category === 'goals' && ctx.goalStats?.total) return { goalStats: ctx.goalStats };
+  if (category === 'gym') return { workoutName: null, lastWorkoutDate: null, today: ctx.today };
+  if (category === 'streaks' && ctx.streaks) {
+    const top = Object.entries(ctx.streaks).sort((a, b) => b[1] - a[1])[0];
+    return top && top[1] > 0 ? { streakCount: top[1], streakLabel: top[0] } : {};
+  }
+  return {};
 }
 
 // ===========================================================================

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -33,7 +34,52 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- V2.1 Phase 2 — native rich notification presentation.
+             LPMessagingService EXTENDS the Capacitor push plugin's service, so
+             token handling + JS `pushNotificationReceived` events keep working
+             (only ONE MESSAGING_EVENT receiver may exist per app). The plugin's
+             own manifest entry is overridden by these explicit declarations. -->
+        <service
+            android:name=".LPMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- The plugin's own service is SUPERSEDED by our subclass above.
+             Without this removal the manifest merger would keep BOTH
+             MESSAGING_EVENT receivers in the final merged manifest — two
+             services competing for every FCM message (undefined delivery,
+             risk of unstyled double presentation). Removing the base class's
+             declaration is safe: LPMessagingService extends it and forwards
+             super.onMessageReceived / onNewToken, so token rotation and the
+             plugin's JS events are unaffected. -->
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+
+        <!-- Immersive presentation over the app (wallpaper + branding +
+             actions). Not exported: only Life Progress launches it. -->
+        <activity
+            android:name=".LifeProgressNotificationActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme.NoActionBar">
+        </activity>
+
+        <!-- "Remind Me Later" — background no-op that dismisses. -->
+        <receiver
+            android:name=".LPSnoozeReceiver"
+            android:exported="false">
+        </receiver>
     </application>
+
+    <!-- Android 13+: the official runtime notification permission. The
+         Capacitor push plugin requests it through its own API at registration
+         time; the manifest entry is what makes the request possible. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Permissions -->
 

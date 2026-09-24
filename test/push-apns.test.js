@@ -307,6 +307,34 @@ test('toApnsPayload: test notifications get the test copy, no sound', () => {
   assert.equal(out.aps.sound, undefined);
 });
 
+// ==================================================================
+// V2.1 Phase 2 — native category mapping (aps.category + thread-id)
+// ==================================================================
+test('aps.category maps every wire category to the native UPPER_SNAKE id', () => {
+  const pairs = {
+    water: 'WATER_REMINDER',
+    gym: 'GYM_REMINDER',
+    goals: 'GOALS_REMINDER',
+    journal: 'JOURNAL_REMINDER',
+    streaks: 'STREAK_REMINDER',
+    achievements: 'ACHIEVEMENT_REMINDER',
+    test: 'GENERAL_REMINDER',
+    '': 'GENERAL_REMINDER',
+    'bogus': 'GENERAL_REMINDER',
+  };
+  for (const [wire, native] of Object.entries(pairs)) {
+    const out = JSON.parse(toApnsPayload(buildPushPayload({ kind: wire === 'test' ? 'test' : 'reminder', category: wire, occurrenceId: 'o', dateKey: '2026-09-24', route: '#/dashboard' })));
+    assert.equal(out.aps.category, native, wire);
+    // thread-id groups per category in Notification Center; empty/unknown → 'general'.
+    // It is an OFFICIAL aps key and lives INSIDE the aps dictionary.
+    if (wire !== 'test') assert.equal(out.aps['thread-id'], wire || 'general', wire);
+  }
+  // The wire `category` field keeps its lowercase web vocabulary.
+  const water = JSON.parse(toApnsPayload(buildPushPayload({ kind: 'reminder', category: 'water', occurrenceId: 'o', dateKey: '2026-09-24', route: '#/water' })));
+  assert.equal(water.category, 'water');
+  assert.notEqual(water.aps.category, water.category);
+});
+
 test('toApnsPayload: already-aps payloads pass through untouched', () => {
   const apsReady = JSON.stringify({ aps: { alert: { title: 'x', body: 'y' } }, type: 'reminder' });
   assert.equal(toApnsPayload(apsReady), apsReady);

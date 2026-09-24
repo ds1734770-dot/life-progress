@@ -175,10 +175,21 @@ export function apnsPayload({ type = 'reminder', category, occurrenceId, dateKey
     alert,
     badge: 1,
     'mutable-content': 1,
+    // V2.1 Phase 2 — the native category id that unlocks iOS's officially
+    // supported custom presentation: a UNNotificationContentExtension
+    // registered for this category renders the immersive Life Progress card,
+    // and the registered UNNotificationActions appear on the notification.
+    // UPPER_SNAKE per Apple convention; the top-level wire `category`
+    // (lowercase, web vocabulary) below is untouched.
+    category: apnsCategoryId(category),
   };
   if (type === 'reminder') {
     aps.sound = 'default';
   }
+  // Group per-category reminders in Notification Center. thread-id is an
+  // OFFICIAL aps key and must live INSIDE the aps dictionary (a top-level
+  // 'thread-id' is ignored by iOS).
+  aps['thread-id'] = String(category || 'general');
   return JSON.stringify({
     aps,
     type,
@@ -187,6 +198,24 @@ export function apnsPayload({ type = 'reminder', category, occurrenceId, dateKey
     dateKey: String(dateKey || ''),
     route: String(route || '#/dashboard'),
   });
+}
+
+/**
+ * V2.1 Phase 2 — wire category → native iOS category identifier.
+ * Must stay in sync with the ids the app registers at launch
+ * (ios/App/App/NotificationCategories.swift) and the extension's copy
+ * tables — asserted cross-language by test/push-apns.test.js.
+ */
+export function apnsCategoryId(category) {
+  const known = {
+    water: 'WATER_REMINDER',
+    gym: 'GYM_REMINDER',
+    goals: 'GOALS_REMINDER',
+    journal: 'JOURNAL_REMINDER',
+    streaks: 'STREAK_REMINDER',
+    achievements: 'ACHIEVEMENT_REMINDER',
+  };
+  return known[String(category || '')] || 'GENERAL_REMINDER';
 }
 
 /**
