@@ -57,6 +57,92 @@ const CUSTOM_WALLPAPER_ID = 'wallpaper-custom';
  */
 const dedupId = (key, period) => `${key}:${period}`;
 
+// ---------------------------------------------------------------------------
+// V2.1 — notification appearance storage (restored verbatim after the V2.2
+// rewrite accidentally dropped these exports, which broke the page module
+// graph at link time — a single missing named export makes EVERY static
+// importer of this module fail to evaluate, i.e. a blank app).
+// ---------------------------------------------------------------------------
+
+/**
+ * The notification wallpaper record, resolved for one occurrence.
+ * `wallpaper.src` is a local bundled asset path OR `wallpaper.custom` marks
+ * the locally-stored user photo (never transmitted anywhere, §21).
+ */
+export async function getNotificationAppearance() {
+  return normalizeNotificationAppearance(await getStore().dbGet(STORE, APPEARANCE_ID));
+}
+
+export async function saveNotificationAppearance(patch) {
+  const current = await getNotificationAppearance();
+  const next = normalizeNotificationAppearance({ ...current, ...patch });
+  await getStore().dbPut(STORE, { ...next, id: APPEARANCE_ID });
+  return next;
+}
+
+export function defaultNotificationAppearancePrefs() {
+  return defaultNotificationAppearance();
+}
+
+/**
+ * Resolve the wallpaper for one notification occurrence and persist the
+ * random-mode recent history so the next occurrence avoids repeats (§18).
+ * `seed` should be the occurrenceId (or a stable preview key).
+ */
+export async function resolveNotificationWallpaper(category, { occurrenceId = '', dayKey = dateKey(), rand = Math.random } = {}) {
+  void category; // per-category wallpaper affinity may come later; selection is appearance-driven
+  const appearance = await getNotificationAppearance();
+  const { wallpaper, recent } = pickNotificationWallpaper(appearance, { occurrenceId, dayKey, rand });
+  if (JSON.stringify(recent) !== JSON.stringify(appearance.recent)) {
+    await saveNotificationAppearance({ recent });
+  }
+  return { appearance, wallpaper };
+}
+
+/**
+ * The custom photo's blob has its OWN record in notificationState
+ * (id 'wallpaper-custom') holding the processed local blob + crop.
+ * Local-only by construction: it can never be exported as an image (export
+ * writes the preference only) and never leaves the device (§21).
+ */
+export async function getCustomWallpaperPhoto() {
+  const rec = await getStore().dbGet(STORE, CUSTOM_WALLPAPER_ID);
+  if (!rec || !(rec.blob instanceof Blob)) return null;
+  return rec;
+}
+
+/**
+ * Store a processed, downscaled local copy of the user's photo.
+ * The caller (settings screen) does the downscaling/cropping via the same
+ * canvas pipeline js/photos.js uses; this only persists the local result.
+ */
+export async function saveCustomWallpaperPhoto(blob, crop = null) {
+  if (!(blob instanceof Blob)) throw new Error('wallpaper blob required');
+  const rec = { id: CUSTOM_WALLPAPER_ID, blob, crop, updatedAt: Date.now() };
+  await getStore().dbPut(STORE, rec);
+  return rec;
+}
+
+export async function removeCustomWallpaperPhoto() {
+  await getStore().dbDelete(STORE, CUSTOM_WALLPAPER_ID);
+  const appearance = await getNotificationAppearance();
+  // Removing the photo while custom mode is active falls back to random —
+  // never leave the appearance pointing at an image that no longer exists.
+  if (appearance.mode === 'custom') return saveNotificationAppearance({ mode: 'random', customPhotoId: null });
+  return saveNotificationAppearance({ customPhotoId: null });
+}
+
+/**
+ * V2.1 — reset the notification wallpaper system to defaults during a full
+ * data wipe (§17): removes the custom photo, crop metadata and preferences,
+ * restoring Random Background. Same store, so clearNotificationState()
+ * already covers the records — this exists for clarity and for tests that
+ * reset appearance without wiping everything.
+ */
+export async function resetNotificationAppearance() {
+  await getStore().dbClear(STORE); // appearance + custom photo live in notificationState
+}
+
 // V2.2 — the canonical occurrence identity lives in js/timeCore.js and is
 // shared verbatim with the server (server/push/domain.js re-exports it):
 // `occurrenceId(deviceKey, category, dateKey)` = deviceKey:category:dateKey.

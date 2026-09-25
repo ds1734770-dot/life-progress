@@ -5,7 +5,12 @@
  */
 // V2.1: bumped for the notification appearance modules (notifyContent,
 // notifyWallpapers, notificationAppearance) joining the precache list.
-const CACHE = 'life-progress-v1.17';
+// V1.18 — bump REQUIRED: the v1.17 cache served a broken module graph
+// (notifications.js was rewritten in V2.2 and its missing exports blanked
+// every statically-importing page). Cache-first + an UNCHANGED cache name
+// would keep serving the poisoned files forever; the bump makes activate()
+// delete the stale cache and install() re-precache the corrected graph.
+const CACHE = 'life-progress-v1.18';
 
 // V2.1 — the 12 built-in wallpaper files, mirrored from the registry in
 // js/notifyWallpapers.js (kept as a literal list here so the precache never
