@@ -17,6 +17,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 import { LPPushDO } from '../cloudflare/do.js';
 import { dispatchNotification } from '../server/push/dispatch.js';
@@ -394,4 +399,64 @@ test('DO with fcmTransport injection: configured FCM path delivers end-to-end', 
   assert.equal(body.message.token, 'f'.repeat(152));
   assert.equal(body.message.notification.title, 'Time for some water 💧', 'shared copy table, not an Android-specific copy system');
   assert.equal(body.message.data.route, '#/water');
+});
+
+/* ================================================================== *
+ * Native source integrity — a build-stopping defect must never pass the suite
+ * (V2.1 regression)
+ *
+ * `LPMessagingService.buildRichNotification()` declared
+ * `android.app.Notification` as its return type and had NO return statement,
+ * so javac rejected the whole module with "missing return statement" — the
+ * Android app could not be assembled at all, which means no APK, which means
+ * no notification in ANY lifecycle state. Every static test passed anyway.
+ *
+ * There is no JDK in this test environment, so compilation cannot be run here;
+ * the next best guarantee is to assert the structural invariant directly on
+ * the source. The check is deliberately general — it walks the real braces of
+ * EVERY method that declares a Notification return type — so the immersive /
+ * full-screen methods being added next are covered automatically.
+ * ================================================================== */
+
+/** Extract a Java method body by name via brace matching from its opening brace. */
+function javaMethodBody(source, name) {
+  const at = source.indexOf(`${name}(`);
+  assert.ok(at > -1, `${name} not found in source`);
+  const open = source.indexOf('{', at);
+  assert.ok(open > -1, `${name} has no body`);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  throw new Error(`unbalanced braces after ${name}`);
+}
+
+test('LPMessagingService: every Notification-returning method actually returns (the missing-return regression)', () => {
+  const src = readFileSync(
+    join(ROOT, 'android/app/src/main/java/com/example/lifeprogress/LPMessagingService.java'),
+    'utf8'
+  );
+  // Every method whose return type is a Notification.
+  const decls = [...src.matchAll(/([\w.]+\s+)(\w+)\s*\(([^)]*)\)\s*\{/g)]
+    .filter((m) => /Notification$/.test(m[1].trim()));
+  assert.ok(decls.length >= 1, 'expected at least one Notification-returning method');
+  for (const decl of decls) {
+    const body = javaMethodBody(src, decl[2]);
+    assert.match(body, /\breturn\b/, `${decl[2]}() must return — a missing return is a javac error, not a warning`);
+  }
+  assert.match(src, /return b\.build\(\);/, 'buildRichNotification must return the built notification');
+});
+
+test('LPMessagingService: the notification is built on the per-category channel', () => {
+  const src = readFileSync(
+    join(ROOT, 'android/app/src/main/java/com/example/lifeprogress/LPMessagingService.java'),
+    'utf8'
+  );
+  // The channel id must match server/push/fcm.js (`lp_<category>`) and
+  // NotificationChannels; an unknown channel silently degrades presentation.
+  assert.match(src, /NotificationCompat\.Builder\(\s*context,\s*"lp_"\s*\+\s*category\s*\)/);
 });

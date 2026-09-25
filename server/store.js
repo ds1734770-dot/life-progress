@@ -164,6 +164,47 @@ export function hasOccurrence(occurrenceId) {
   return Boolean(state().deliveries[occurrenceId]);
 }
 
+// ---------------------------------------------------------------------------
+// Client ACK (V2.2) — the local→server half of occurrence ownership.
+// A device that HANDLED an occurrence locally (reminder presented, dedup
+// marker written) records it here. The ACK writes the SAME deliveries ledger
+// row the scheduler's claimOccurrence() gates on, so a later server tick
+// finds the occurrence already claimed and never sends a duplicate push.
+// ACK = "the occurrence was presented on the device", never "the app
+// opened" / "the scheduler ran" / "the provider returned 200".
+// ---------------------------------------------------------------------------
+
+/**
+ * Record a client ACK for one occurrence. Returns one of:
+ *   'acked'    — stored (new) on the ledger row
+ *   'already'  — a ledger row already exists (claimed/acked/delivered…):
+ *                idempotent no-op, still a success for the client
+ *   'not-due'  — rejected: scheduledFor is in the future. An occurrence can
+ *                never be handled before its instant — recording it would
+ *                consume the day's reminder early (exactly the Wave-1 bug
+ *                being fixed)
+ *   'unknown'  — rejected: the subscription's schedule has no such
+ *                occurrence right now (parity with the Durable Object's
+ *                'no such occurrence scheduled')
+ * `scheduledForMs` is the scheduled instant of the occurrence per the
+ * SUBSCRIPTION's own schedule (js/timeCore.js canonical model); null means
+ * the occurrence is not part of that schedule.
+ */
+export function ackOccurrence(occurrenceId, meta = {}, scheduledForMs = null) {
+  const existing = state().deliveries[occurrenceId];
+  if (existing) return Promise.resolve('already');
+  if (scheduledForMs === null) return Promise.resolve('unknown');
+  if (scheduledForMs > Date.now()) return Promise.resolve('not-due');
+  return mutate((d) => {
+    d.deliveries[occurrenceId] = { claimedAt: Date.now(), source: 'ack', ...meta };
+  }).then(() => 'acked');
+}
+
+/** True when the occurrence has any ledger row (claimed, delivered or acked). */
+export function isAcked(occurrenceId) {
+  return Boolean(state().deliveries[occurrenceId]);
+}
+
 export function updateOccurrence(occurrenceId, patch) {
   return mutate((d) => {
     const rec = d.deliveries[occurrenceId];

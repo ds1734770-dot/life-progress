@@ -172,11 +172,27 @@ test('mapApnsResponse: 200 → delivered', () => {
   assert.equal(mapApnsResponse(200), OUTCOME.DELIVERED);
 });
 
-test('mapApnsResponse: 410 and Unregistered/BadDeviceToken → gone', () => {
+test('mapApnsResponse: only definitive dead-token signals → gone', () => {
   assert.equal(mapApnsResponse(410), OUTCOME.GONE);
   assert.equal(mapApnsResponse(400, 'Unregistered'), OUTCOME.GONE);
-  assert.equal(mapApnsResponse(400, 'BadDeviceToken'), OUTCOME.GONE);
-  assert.equal(mapApnsResponse(400, 'DeviceTokenNotForTopic'), OUTCOME.GONE);
+});
+
+test('mapApnsResponse: V2.1 FIX — configuration mistakes are never gone (a device is never deleted for one)', () => {
+  // `BadDeviceToken` is what APNs returns when the token does not match the
+  // ENVIRONMENT — Apple's own wording is "verify that the token matches the
+  // environment" — i.e. a wrong bundle id/topic, or a development token sent
+  // to the production host. `DeviceTokenNotForTopic`/`TopicDisallowed` are the
+  // same family. Classifying these as `gone` made BOTH backends forget a
+  // perfectly healthy device over a deployment mistake: cloudflare/do.js#tick
+  // runs `DELETE FROM push_subscriptions`, and the Node scheduler sets
+  // `disabled = true`. They are configuration problems, not device state, so
+  // the record is retained and the error is recorded + surfaced instead.
+  assert.equal(mapApnsResponse(400, 'BadDeviceToken'), OUTCOME.NOT_CONFIGURED);
+  assert.equal(mapApnsResponse(400, 'DeviceTokenNotForTopic'), OUTCOME.NOT_CONFIGURED);
+  assert.equal(mapApnsResponse(400, 'TopicDisallowed'), OUTCOME.NOT_CONFIGURED);
+  assert.equal(mapApnsResponse(400, 'MissingTopic'), OUTCOME.NOT_CONFIGURED);
+  assert.equal(mapApnsResponse(403, 'InvalidProviderToken'), OUTCOME.NOT_CONFIGURED);
+  assert.equal(mapApnsResponse(403, 'ExpiredProviderToken'), OUTCOME.NOT_CONFIGURED);
 });
 
 test('mapApnsResponse: 429 and 5xx → transient_failure', () => {
@@ -188,7 +204,7 @@ test('mapApnsResponse: 429 and 5xx → transient_failure', () => {
 test('mapApnsResponse: other 4xx → permanent_failure (nothing silently retried)', () => {
   assert.equal(mapApnsResponse(400, 'PayloadEmpty'), OUTCOME.PERMANENT);
   assert.equal(mapApnsResponse(400, null), OUTCOME.PERMANENT);
-  assert.equal(mapApnsResponse(403, 'Forbidden'), OUTCOME.PERMANENT);
+  assert.equal(mapApnsResponse(405, 'MethodNotAllowed'), OUTCOME.PERMANENT);
 });
 
 /* ================================================================== *

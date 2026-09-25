@@ -29,7 +29,7 @@
  * occurrence claims. No journal text, no activity history, no photos, no
  * notification copy (the service worker derives copy on-device).
  */
-import { computeNextOccurrences, decideOccurrence, buildPushPayload, ROUTES } from '../server/push/domain.js';
+import { computeNextOccurrences, decideOccurrence, buildPushPayload, ROUTES, occurrenceId, validateAck, CONTENT_CATEGORIES } from '../server/push/domain.js';
 import { dispatchNotification, OUTCOME } from '../server/push/dispatch.js';
 import { sendPushMessage } from '../server/push/webpush.js';
 // V2.1 — allowlist for per-category test pushes (see testPush()).
@@ -207,6 +207,9 @@ export class LPPushDO {
       if (request.method === 'POST' && url.pathname === '/test') {
         return Response.json(await this.testPush(await request.json()));
       }
+      if (request.method === 'POST' && url.pathname === '/ack') {
+        return Response.json(await this.ack(await request.json()));
+      }
       if (request.method === 'GET' && url.pathname === '/status') {
         return Response.json(await this.status());
       }
@@ -278,6 +281,67 @@ export class LPPushDO {
     // burning alarm cycles. A later register() re-arms (see register).
     this.#idleAlarmIfEmpty();
     return { ok: true };
+  }
+
+  /**
+   * V2.2 — occurrence ownership: a device reports a REAL occurrence was
+   * handled and PRESENTED locally (reminder shown, dedup marker written).
+   *
+   * The ACK writes the SAME `notification_occurrences` row the scheduler's
+   * atomic claim (#claim) gates on — the occurrence_id PRIMARY KEY is the
+   * serialization point — so a later tick finds the occurrence already
+   * claimed and never sends the duplicate push.
+   *
+   * Semantics enforced here:
+   *  · The occurrence identity is computed SERVER-SIDE from the validated
+   *    deviceKey/category/dateKey (canonical shared model) — the client
+   *    never dictates the row key.
+   *  · 'not-due' rejection: the ACK is refused when the occurrence's
+   *    scheduled instant is still in the future. Handling an occurrence
+   *    before it is due is exactly the Wave-1 bug; an early ACK would
+   *    consume the day's reminder.
+   *  · Idempotent: an existing row (claimed/delivered/acked) answers
+   *    ok:true with state:'already' — duplicates stay harmless.
+   *  · ACK never means "the app opened", "the scheduler ran" or "the
+   *    provider returned 200": the caller must only send it after a real
+   *    presentation, and `source` records which mechanism presented it.
+   */
+  async ack(body = {}) {
+    const v = validateAck(body);
+    if (v.error) return { ok: false, error: v.error };
+    const { deviceKey, category, dateKey, source, occurrenceId: occId } = v.value;
+
+    const row = this.sql.exec('SELECT * FROM push_subscriptions WHERE device_key = ?', deviceKey).one();
+    if (!row) return { ok: false, error: 'subscription not found' };
+
+    // Existing row → already claimed/handled (by the scheduler OR an earlier
+    // ack). Idempotent success; the duplicate push is suppressed either way.
+    const existing = this.sql.exec(
+      'SELECT status FROM notification_occurrences WHERE occurrence_id = ?', occId
+    ).one();
+    if (existing) return { ok: true, occurrenceId: occId, state: 'already' };
+
+    // Scheduled instant from the SUBSCRIPTION's own schedule — the same
+    // canonical occurrence model the tick runs. Missing schedule entries
+    // (unknown category/time) are rejected: an ACK must reference a real
+    // scheduled occurrence, never a made-up one.
+    const record = this.#toSubRecord(row);
+    const now = this.now();
+    const occ = computeNextOccurrences(record, now)
+      .find((o) => o.category === category && o.dateKey === dateKey);
+    if (!occ) return { ok: false, error: 'no such occurrence scheduled' };
+    if (occ.epochMs > now) {
+      return { ok: false, error: 'occurrence not due yet', occurrenceId: occId };
+    }
+
+    // Serialized claim — identical to the scheduler's: PK insert or conflict.
+    if (!this.#claim(occ, deviceKey)) {
+      return { ok: true, occurrenceId: occId, state: 'already' };
+    }
+    // Mark HOW it was handled: client ack (local sweep or push display),
+    // keeping scheduler statuses untouched for /status readability.
+    this.#setOccurrence(occId, { status: `acked:${source}` });
+    return { ok: true, occurrenceId: occId, state: 'acked' };
   }
 
   async status() {
@@ -534,10 +598,19 @@ export class LPPushDO {
 
   #ledgerFor(deviceKey) {
     const ledger = {};
+    // V2.2 — only HANDLED occurrences advance the restart-safe ledger
+    // position. `claimed` alone means the tick grabbed the occurrence but
+    // delivery has not succeeded (transient failure / not-configured);
+    // counting it would make computeNextOccurrences jump to TOMORROW and
+    // silently swallow today's reminder on the next restart/eviction.
+    const HANDLED = ['acked:local', 'acked:push', 'delivered', 'gone', 'failed', 'missed', 'quiet-hours', 'not-configured'];
+    const placeholders = HANDLED.map(() => '?').join(', ');
     for (const row of this.sql.exec(
       `SELECT category, MAX(scheduled_for) AS last
-         FROM notification_occurrences WHERE device_key = ? GROUP BY category`,
-      deviceKey
+         FROM notification_occurrences
+        WHERE device_key = ? AND status IN (${placeholders})
+        GROUP BY category`,
+      deviceKey, ...HANDLED
     ).rows) ledger[row.category] = row.last;
     return ledger;
   }

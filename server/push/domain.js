@@ -1,24 +1,46 @@
 /**
- * Pure reminder-scheduling domain — shared by BOTH backends (V1.6.4).
+ * Pure reminder-scheduling domain — shared by BOTH backends (V2.2).
  *
- * Extracted verbatim from server/scheduler.js so the Cloudflare Worker can
- * reuse the exact V1.6.3 delivery policy without importing the Node
- * filesystem store. Contains NO I/O: every function is pure and takes its
- * clock as a parameter, which is what makes deterministic testing possible
- * on either runtime.
+ * V2.2 — ONE canonical occurrence model. `computeNextOccurrences`,
+ * `isDue`, `isEligible`, `occurrenceId` and `ACK_GRACE_MS` live in
+ * js/timeCore.js (client-safe: no server imports) and are RE-EXPORTED here
+ * verbatim. The server scheduler and the page's local sweep therefore run
+ * the EXACT same code — they cannot disagree about when an occurrence is
+ * due, what its identity is, or when it is too late to claim it.
  *
- * Semantics preserved exactly (§10–§13 of the V1.6.3 spec):
- *  - one pending occurrence per enabled category, deterministic id
- *    `deviceKey:category:dateKey-in-user-tz`
- *  - 90 s grace window; older occurrences are `missed`, never replayed
- *  - quiet hours evaluated for the occurrence's wall-clock minute in the
- *    device timezone; suppressed occurrences are never replayed
- *  - minimal payload: category/occurrenceId/dateKey/route/serverTime only —
- *    no personal data; the service worker derives copy locally
+ * Canonical occurrence identity: deviceKey:category:dateKey
+ *   - device (via deviceKey)
+ *   - category
+ *   - date (the date the wall-clock reminder time belongs to in the device's
+ *     IANA timezone; decided by wall-clock math, never by the UTC date of
+ *     the epoch instant)
+ *
+ * Delivery-state models used by the server and the local page:
+ *   - server:  the deliveries ledger (server/store.js / DO
+ *              `notification_occurrences`, occurrenceId PK). claimOccurrence()
+ *              is the ONLY gate before a push travels; a client ACK writes
+ *              the same ledger row, so a locally-handled occurrence is never
+ *              pushed afterwards.
+ *   - local:   notificationState store (js/db.js), dedup record
+ *              `category:daily:dateKey` (kept client-side only).
+ *
+ * Shared terms: occurrenceId, dateKey, isDue, isEligible, ackOccurrence,
+ *   isAcked.
  */
-import { nextDailyOccurrence, timeToMinutes, inQuietHours, zonedTimeToEpoch, zonedParts } from '../../js/timeCore.js';
+
+import { nextDailyOccurrence, timeToMinutes, inQuietHours } from '../../js/timeCore.js';
+import {
+  ACK_GRACE_MS,
+  occurrenceId,
+  computeNextOccurrences,
+  isDue,
+  isEligible,
+} from '../../js/timeCore.js';
+
+export { ACK_GRACE_MS, occurrenceId, computeNextOccurrences, isDue, isEligible };
 
 export const GRACE_MS = 90 * 1000; // deliver up to 90s late (tick jitter, clock drift)
+export const CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
 export const CONTENT_CATEGORIES = ['water', 'gym', 'goals', 'journal'];
 
 /** Route hint per category — same hash routes the in-app router uses. */
@@ -33,56 +55,9 @@ export const ROUTES = {
 };
 
 /**
- * Compute the next pending occurrence for every timed, enabled category of a
- * subscription. Pure: derives everything from the record + the given clock.
- */
-export function computeNextOccurrences(sub, nowMs = Date.now()) {
-  const out = [];
-  if (!sub || sub.enabled === false || sub.disabled) return out;
-  const tz = sub.timezone;
-  if (!tz) return out;
-  for (const category of CONTENT_CATEGORIES) {
-    if (sub.categories?.[category] === false) continue;
-    const time = sub.times?.[category];
-    const mins = timeToMinutes(time);
-    if (mins === null) continue;
-    // Resume from the ledger position if we have one, so a restart never
-    // re-delivers the occurrence that was already handled.
-    const lastHandled = sub.ledger?.[category] || null;
-    const anchor = lastHandled ? Math.max(nowMs, lastHandled) : nowMs;
-
-    // V1.6.4 FIX (grace-window reachability): the previous implementation
-    // only ever surfaced STRICTLY FUTURE occurrences, so a tick landing a
-    // few seconds after the wall-clock minute — which is every tick — skipped
-    // the occurrence entirely and decideOccurrence's 90 s grace window was
-    // unreachable: daily reminders silently never fired. Now TODAY'S
-    // occurrence is always surfaced unless the ledger already records it as
-    // handled (never re-deliver, §13); decideOccurrence then classifies it:
-    // future → reschedule, within grace → deliver, past grace → missed.
-    const hh = Math.floor(mins / 60);
-    const mm = mins % 60;
-    const todayAtTime = zonedTimeToEpoch(anchor, tz, hh, mm);
-    const alreadyHandled = lastHandled && todayAtTime <= lastHandled;
-
-    const next = alreadyHandled
-      ? nextDailyOccurrence(tz, time, anchor) // Tomorrow, DST-safe (§10).
-      : { epochMs: todayAtTime, dateKey: zonedParts(todayAtTime, tz).dateKey };
-    if (!next) continue;
-    out.push({
-      category,
-      time,
-      epochMs: next.epochMs,
-      dateKey: next.dateKey,
-      occurrenceId: `${sub.deviceKey}:${category}:${next.dateKey}`,
-    });
-  }
-  return out;
-}
-
-/**
  * Decide what to do with an occurrence. Returns one of:
- *  { action: 'deliver' } | { action: 'skip', reason } | { action: 'reschedule' }
- * Exported for unit tests — this is the complete delivery policy (§11/§12).
+ *   { action: 'deliver' } | { action: 'skip', reason } | { action: 'reschedule' }
+ * Exported for unit tests — this is the complete server delivery policy (§11/§12).
  */
 export function decideOccurrence(sub, occ, nowMs = Date.now()) {
   // Not due yet — wait for the next tick. Never deliver early.
@@ -100,6 +75,31 @@ export function decideOccurrence(sub, occ, nowMs = Date.now()) {
     return { action: 'skip', reason: 'missed' };
   }
   return { action: 'deliver' };
+}
+
+/**
+ * Validate + normalize an ACK request body — the shared contract for the
+ * Node backend and the Cloudflare Worker (extracted here so both backends
+ * enforce the identical shape). Returns { error } or { value }.
+ *
+ * ACK semantics (V2.2): an ack records that a REAL occurrence was handled
+ * and PRESENTED on the device. It must never be sent for "the app opened",
+ * "the scheduler ran" or "the provider returned 200". A not-yet-due
+ * occurrence (scheduledFor in the future) is rejected — claiming an
+ * occurrence before its scheduled instant is exactly the bug being fixed.
+ */
+export function validateAck(body) {
+  if (!body || typeof body !== 'object') return { error: 'invalid body' };
+  const { deviceKey, category, dateKey, source } = body;
+  if (typeof deviceKey !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(deviceKey)) {
+    return { error: 'invalid deviceKey' };
+  }
+  if (!CONTENT_CATEGORIES.includes(category)) return { error: 'invalid category' };
+  if (typeof dateKey !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return { error: 'invalid dateKey' };
+  }
+  const src = source === 'push' || source === 'local' ? source : 'local';
+  return { value: { deviceKey, category, dateKey, source: src, occurrenceId: occurrenceId(deviceKey, category, dateKey) } };
 }
 
 /** Build the minimal push payload (§14). Nothing personal ever goes here. */

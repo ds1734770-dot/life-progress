@@ -161,6 +161,10 @@ export async function processPush(raw, deps) {
     // V2.1 — optional wallpaper resolution (SW passes the real one; server
     // side and unit tests omit it and stay notification-icon-only).
     resolveWallpaper = null,
+    // V2.2 — occurrence ownership: after the OS actually displays a reminder
+    // push, the SW ACKs the occurrence so the server never re-sends it.
+    // Injected so tests can spy on it; sw.js passes the real fetch-based ACK.
+    ackOccurrence = null,
   } = deps;
 
   const parsed = validatePushPayload(raw);
@@ -176,6 +180,12 @@ export async function processPush(raw, deps) {
     }));
     return { shown: true, reason: 'test' };
   }
+
+  // ---- V2.2 duplicate-delivery defense (occurrence identity) --------------
+  // A reminder-type payload with an EMPTY dateKey is a test/category push
+  // (`deviceKey:test:<ts>`), not a scheduled occurrence — nothing to dedup
+  // against a day's occurrence. Real scheduled pushes always carry their
+  // canonical dateKey.
 
   // ---- Gate 1-3: master → category → quiet hours (at delivery, device tz) --
   const prefs = await getNotificationPrefs();
@@ -225,5 +235,17 @@ export async function processPush(raw, deps) {
 
   // Dedup marker written only AFTER a real display (V1.5 invariant).
   await markDelivered(p.key, p.period, { route: final.route || p.route, source: 'push' });
+
+  // ---- V2.2 — ACK the occurrence AFTER the OS-level display ---------------
+  // The dedup marker is written and show() has resolved: the notification is
+  // with the OS. ACKing here (and never earlier) keeps ACK = "presented to
+  // the user", the product's actual handled state — never "the app opened",
+  // "the scheduler ran" or "the provider returned 200". Fire-and-forget: a
+  // failed ACK can only cause a duplicate later, which the marker above and
+  // the server's occurrence claim both suppress.
+  if (ackOccurrence) {
+    try { await ackOccurrence(p.occurrenceId); } catch { /* duplicate suppressed client-side */ }
+  }
+
   return { shown: true, reason: 'reminder', category: p.category, personalized: Boolean(copy) };
 }

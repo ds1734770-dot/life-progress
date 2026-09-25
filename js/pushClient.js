@@ -375,9 +375,13 @@ export async function subscribeAndRegister(prefs) {
 
     const deviceKey = await getDeviceKey();
     const registered = await registerWithServer(deviceKey, sub, prefs, publicKey);
+    // V2.2 — persist the API base with the registration: the service worker
+    // (no window, no push-config import) reads it from here to POST ACKs for
+    // handled occurrences to the same backend the page registered with.
     const state = await savePushState({
       status: 'active',
       deviceKey,
+      apiBase: API_BASE(),
       endpoint: sub.endpoint,
       vapidPublic: publicKey,
       registeredAt: registered?.at || Date.now(),

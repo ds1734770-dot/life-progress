@@ -230,6 +230,80 @@ function addOneDay({ year, month, day }) {
  * The date key ("YYYY-MM-DD") a given instant falls on in `tz` — used to
  * build deterministic occurrence ids shared across server and clients.
  */
+/**
+ * V2.2 — canonical occurrence identity: `deviceKey:category:dateKey`.
+ * ONE identity for a reminder occurrence across the page, the service
+ * worker, the Node backend and the Cloudflare Worker: device, category and
+ * the occurrence DATE — the date the wall-clock reminder time belongs to in
+ * the device's IANA timezone (never the UTC date of the epoch instant).
+ * water + 2026-09-24, water + 2026-09-25 and gym + 2026-09-24 are three
+ * different occurrences by construction.
+ */
+export function occurrenceId(deviceKey, category, dateKey) {
+  return `${deviceKey}:${category}:${dateKey}`;
+}
+
+/** Window after the scheduled instant during which a due occurrence may
+ * still be handled/ACKed by a client (server: ACK/push grace window). */
+export const ACK_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * Compute the next pending occurrence for every timed, enabled category of a
+ * subscription. THE canonical occurrence model: the server scheduler
+ * (server/push/domain.js re-exports this verbatim) and the page's local
+ * sweep run the EXACT same code, so they can never disagree about when an
+ * occurrence is due. Pure: derives everything from the record + the clock.
+ *
+ * Surfaces TODAY'S occurrence unless the ledger already records it as
+ * handled (never re-deliver); the caller classifies it via isDue/isEligible
+ * or decideOccurrence: future → reschedule, within grace → deliver/ACK,
+ * past grace → missed, never replayed.
+ */
+export function computeNextOccurrences(sub, nowMs = Date.now()) {
+  const out = [];
+  if (!sub || sub.enabled === false || sub.disabled) return out;
+  const tz = sub.timezone;
+  if (!tz) return out;
+  for (const category of ['water', 'gym', 'goals', 'journal']) {
+    if (sub.categories?.[category] === false) continue;
+    const time = sub.times?.[category];
+    const mins = timeToMinutes(time);
+    if (mins === null) continue;
+    // Resume from the ledger position if we have one, so a restart never
+    // re-delivers the occurrence that was already handled.
+    const lastHandled = sub.ledger?.[category] || null;
+    const anchor = lastHandled ? Math.max(nowMs, lastHandled) : nowMs;
+
+    const hh = Math.floor(mins / 60);
+    const mm = mins % 60;
+    const todayAtTime = zonedTimeToEpoch(anchor, tz, hh, mm);
+    const alreadyHandled = lastHandled && todayAtTime <= lastHandled;
+
+    const next = alreadyHandled
+      ? nextDailyOccurrence(tz, time, anchor) // Tomorrow, DST-safe (§10).
+      : { epochMs: todayAtTime, dateKey: zonedParts(todayAtTime, tz).dateKey };
+    if (!next) continue;
+    out.push({
+      category,
+      time,
+      epochMs: next.epochMs,
+      dateKey: next.dateKey,
+      occurrenceId: occurrenceId(sub.deviceKey, category, next.dateKey),
+    });
+  }
+  return out;
+}
+
+/** The occurrence is due at or before `nowMs` — it may now be handled. */
+export function isDue(occ, nowMs) {
+  return occ.epochMs <= nowMs;
+}
+
+/** Due AND still inside the handling window (not claimed before it was due). */
+export function isEligible(occ, nowMs = Date.now()) {
+  return nowMs <= occ.epochMs + ACK_GRACE_MS;
+}
+
 export function zonedDateKey(epochMs, tz) {
   return zonedParts(epochMs, tz).dateKey;
 }

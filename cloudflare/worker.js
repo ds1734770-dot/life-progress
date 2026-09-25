@@ -113,6 +113,20 @@ export default {
         return new Response(res.body, { status: res.status, headers: cors });
       }
 
+      // V2.2 — occurrence ownership: the device reports a REAL occurrence
+      // was handled and PRESENTED locally. The DO writes the same
+      // notification_occurrences row the scheduler's claim gates on, so a
+      // later tick never re-sends that push. Validation is the shared
+      // validateAck contract (server/push/domain.js) — same as the Node API.
+      if (request.method === 'POST' && url.pathname === '/api/push/ack') {
+        const body = await readJson(request);
+        const res = await doStub(env).fetch('https://do/ack', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        return new Response(res.body, { status: res.status, headers: cors });
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/push/unregister') {
         const body = await readJson(request);
         const res = await doStub(env).fetch('https://do/unregister', {

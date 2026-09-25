@@ -8,7 +8,7 @@
  * is covered by scripts/qa-notifications.js in a real browser.
  */
 import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import assert from 'assert/strict';
 import {
   defaultNotificationPrefs,
   normalizePrefs,
@@ -19,9 +19,21 @@ import {
   reminderBlocked,
   buildPayload,
   ELIGIBILITY,
-  CATEGORIES,
   DEEP_LINKS,
 } from '../js/notifications.js';
+import {
+  zonedTimeToEpoch,
+  zonedParts,
+  nextDailyOccurrence,
+  timeToMinutes as tcTimeToMinutes,
+  occurrenceId,
+} from '../js/timeCore.js';
+
+// CATEGORIES mirrors the original V1.5 full notification category list
+// (identical to the exports in the module) — used by the preference and
+// eligibility tests.  Do NOT re-export from notifications.js: that module
+// was deliberately trimmed in V2.2, so the full list lives here.
+const CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
 
 // ---------------------------------------------------------------------------
 // Preferences
@@ -279,4 +291,201 @@ test('deep links use existing router routes', () => {
   assert.equal(DEEP_LINKS.goals, '#/goals');
   assert.equal(DEEP_LINKS.journal, '#/journal');
   assert.equal(DEEP_LINKS.achievements, '#/achievements');
+});
+
+// ---------------------------------------------------------------------------
+// Wave 1 — TIME-GATED LOCAL SWEEP regression tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive runReminderSweep() through the REAL canonical occurrence model
+ * (js/timeCore.js computeNextOccurrences — the same code the server runs).
+ * Only the environment edges are injected: an in-memory dedup/prefs store,
+ * a spy display function (there is no Notification API in Node) and a spy
+ * ACK recorder (there is no fetch in Node). Every gate that fires inside
+ * the sweep — time-gate, grace window, quiet hours, dedup, usefulness —
+ * runs for real.
+ */
+async function driveSweep(over = {}) {
+  const {
+    nowMs = Date.UTC(2026, 0, 14, 9, 0, 0), // 09:00 UTC
+    deliveredBefore = [], // full dedup ids already present
+    ctx = null,
+    tz = 'UTC',
+    showResult = true,
+    times = null, // per-test schedule override
+  } = over;
+
+  const mod = await import('../js/notifications.js');
+  const timeCore = await import('../js/timeCore.js');
+
+  // Real prefs with a hardcoded schedule so every test is deterministic.
+  const prefs = mod.defaultNotificationPrefs();
+  prefs.enabled = true;
+  prefs.categories.water = true;
+  prefs.categories.gym = true;
+  prefs.categories.goals = true;
+  prefs.categories.journal = true;
+  prefs.categories.streaks = true;
+  prefs.times.water = '14:00';
+  prefs.times.gym = '11:00';
+  prefs.times.goals = '09:00';
+  prefs.times.journal = '21:30';
+  prefs.quietStart = '22:30';
+  prefs.quietEnd = '07:00';
+  if (times) Object.assign(prefs.times, times);
+
+  // Deterministic in-memory store (dedup + prefs are the only state the
+  // sweep reads/writes). `deliveredBefore` entries must be FULL dedup ids
+  // (`water:daily:2026-01-14`) — the canonical `<key>:<period>` shape.
+  const dedup = new Map();
+  dedup.set('prefs', { id: 'prefs', ...prefs });
+  for (const d of deliveredBefore) dedup.set(d, { id: d });
+  mod.setStoreState({
+    async dbGet(store, id) { return dedup.has(id) ? { id, ...dedup.get(id) } : null; },
+    async dbPut(store, value) { dedup.set(value.id, value); return value; },
+    async dbGetAll(store) { return Array.from(dedup.values()); },
+    async dbDelete(store, id) { dedup.delete(id); return true; },
+    async dbClear(store) { dedup.clear(); },
+  });
+
+  const shown = [];
+  const acks = [];
+
+  const result = await mod.runReminderSweep({
+    now: new Date(nowMs),
+    ctx,
+    computeNextOccurrences: (sub, atMs) => timeCore.computeNextOccurrences({ ...sub, timezone: tz }, atMs),
+    show: async (payload) => { shown.push(payload); return showResult; },
+    ackOccurrence: async (occurrenceId) => { acks.push(occurrenceId); return true; },
+  });
+
+  mod.setStoreState(null);
+  return { result, shown, acks, markers: Array.from(dedup.keys()).filter((k) => k !== 'prefs') };
+}
+
+/** Reminder context for tests that need a DELIVERABLE reminder (no IndexedDB
+ * in Node — the eligibility engine derives usefulness from real data). */
+const RICH_CTX = { waterTarget: 2500, waterTotal: 1000, waterRemaining: 1500, journalToday: false, goalStats: { total: 4, completed: 2, pending: 2, pct: 50 }, streaks: { water: 3, gym: 0, goals: 5, journal: 0 }, hasWorkoutToday: false, workouts: [] };
+
+test('time-gated sweep: app opened before configured time → no occurrence claimed', async () => {
+  // Water reminder = 14:00. App opened at 09:00. The occurrence is not due:
+  // nothing delivered, nothing shown, NO dedup marker, NO ACK.
+  const { result, shown, acks, markers } = await driveSweep({
+    nowMs: Date.UTC(2026, 0, 14, 9, 0, 0),
+  });
+  assert.equal(result.delivered.length, 0, 'nothing delivered before the scheduled time');
+  assert.equal(shown.length, 0, 'no notification shown (time gate respected)');
+  assert.equal(markers.length, 0, 'no dedup marker written before the scheduled time');
+  assert.equal(acks.length, 0, 'no ACK sent before the scheduled time');
+  // Skip entries prove the time-gate fired (water 14:00, not yet due).
+  assert.ok(result.skipped.some((s) => s.startsWith('water:before-')), 'sweep recorded the before-time skip');
+});
+
+test('time-gated sweep: occurrence becomes due at the configured time', async () => {
+  // Sweep at 14:00 UTC — the water occurrence is exactly due: presented
+  // once, canonical dedup marker written, occurrence ACKed to the server.
+  const nowMs = Date.UTC(2026, 0, 14, 14, 0, 0);
+  const { result, shown, acks, markers } = await driveSweep({ nowMs, ctx: RICH_CTX });
+  assert.ok(result.delivered.includes('water'), 'the due occurrence was delivered');
+  assert.equal(shown.length, 1, 'one notification shown');
+  assert.ok(markers.includes('water:daily:2026-01-14'), 'canonical dedup marker (category:daily:dateKey)');
+  assert.deepEqual(acks, ['local-page:water:2026-01-14'], 'ACK carries the canonical occurrenceId');
+});
+
+test('time-gated sweep: occurrence already handled → no duplicate local reminder', async () => {
+  // A dedup marker for the 01-14 occurrence already exists (an earlier sweep
+  // or the push path handled it): the sweep must not present it again.
+  const nowMs = Date.UTC(2026, 0, 14, 14, 0, 0);
+  const { result, shown, acks, markers } = await driveSweep({
+    nowMs,
+    deliveredBefore: ['water:daily:2026-01-14'],
+  });
+  assert.equal(result.delivered.length, 0, 'already-handled occurrence NOT duplicated');
+  assert.equal(shown.length, 0, 'no second notification shown');
+  assert.equal(markers.filter((m) => m === 'water:daily:2026-01-14').length, 1, 'no new marker written (idempotent store)');
+  assert.equal(acks.length, 0, 'no second ACK for the same occurrence');
+});
+
+test('time-gated sweep: occurrence expired after grace window → missed, no claim', async () => {
+  // Sweep 10 min after the 14:00 occurrence — past the 5-minute handling
+  // window. Documented missed-occurrence policy: no presentation, no
+  // marker, NO ACK, and the reminder is never re-created at the sweep instant.
+  const nowMs = Date.UTC(2026, 0, 14, 14, 10, 0);
+  const { result, shown, acks, markers } = await driveSweep({ nowMs });
+  assert.equal(result.delivered.length, 0, 'expired occurrence not delivered');
+  assert.ok(result.skipped.some((s) => s === 'water:missed'), 'missed policy recorded');
+  assert.equal(shown.length, 0, 'nothing shown after grace');
+  assert.equal(markers.length, 0, 'no dedup marker written (occurrence missed, not claimed)');
+  assert.equal(acks.length, 0, 'no ACK for a missed occurrence');
+});
+
+test('time-gated sweep: different dates are distinct occurrences', async () => {
+  // Water moved to 11:00. At 2026-09-24 11:00 UTC the 09-24 occurrence is
+  // due and claimed; the 09-25 occurrence does not exist yet (one occurrence
+  // per day by construction). The marker carries the dateKey, so the same
+  // category on a different date is a DIFFERENT occurrence.
+  const nowMs = Date.UTC(2026, 8, 24, 11, 0, 0);
+  const { result, shown, acks, markers } = await driveSweep({
+    nowMs,
+    ctx: RICH_CTX,
+    times: { water: '11:00' },
+  });
+  assert.ok(result.delivered.includes('water'), 'today (09-24) occurrence delivered');
+  assert.ok(markers.includes('water:daily:2026-09-24'), 'marker keyed by the 09-24 dateKey');
+  assert.ok(!markers.includes('water:daily:2026-09-25'), 'the 09-25 occurrence was not claimed');
+  assert.ok(acks.includes('local-page:water:2026-09-24'), 'ACK identity is date-scoped');
+  assert.equal(shown.length, 1, 'exactly one notification shown');
+});
+
+test('canonical occurrence identity: category and date changes yield distinct occurrences', () => {
+  // The required identity matrix (Wave-1 spec): water+2026-09-24,
+  // water+2026-09-25 and gym+2026-09-24 are three DIFFERENT occurrences —
+  // by construction, in the ONE identity function both server and page run.
+  const water24 = occurrenceId('dev-0001', 'water', '2026-09-24');
+  const water25 = occurrenceId('dev-0001', 'water', '2026-09-25');
+  const gym24 = occurrenceId('dev-0001', 'gym', '2026-09-24');
+  assert.equal(water24, 'dev-0001:water:2026-09-24');
+  assert.notEqual(water24, water25, 'different dates → different occurrences');
+  assert.notEqual(water24, gym24, 'different categories → different occurrences');
+  assert.notEqual(water25, gym24, 'date and category both matter');
+});
+
+test('time-gated sweep: category identity flows through the canonical dedup key', async () => {
+  // At 11:00 the 14:00 water occurrence is NOT due: no water notification,
+  // no water dedup marker, no water ACK — one category's due state never
+  // claims another category's occurrence.
+  const nowMs = Date.UTC(2026, 8, 24, 11, 0, 0);
+  const { result, shown, acks, markers } = await driveSweep({ nowMs, ctx: RICH_CTX });
+  assert.equal(result.delivered.includes('water'), false, 'water not delivered before its 14:00 time');
+  assert.ok(!markers.some((m) => m.startsWith('water:')), 'no water marker written before its time');
+  assert.equal(acks.filter((a) => a.includes(':water:')).length, 0, 'no water ACK before its time');
+});
+
+test('time-gated sweep: non-UTC zone respects the LOCAL calendar day boundary', async () => {
+  // A New York user (UTC-5 in January) with a 23:50 local reminder: the
+  // occurrence belongs to the LOCAL day's dateKey, not the UTC one.
+  // 2026-01-14 23:50 America/New_York = 2026-01-15 04:50 UTC. At 04:00 UTC
+  // (23:00 local, before the scheduled time) nothing may fire; at 04:50 UTC
+  // it is due, and the marker + ACK carry the LOCAL dateKey 2026-01-14 —
+  // proving the identity is anchored to the user's calendar, not the server's.
+  const { result, shown, acks, markers } = await driveSweep({
+    nowMs: Date.UTC(2026, 0, 15, 4, 0, 0),
+    ctx: RICH_CTX,
+    tz: 'America/New_York',
+    times: { water: '23:50' },
+  });
+  assert.equal(result.delivered.length, 0, '23:00 local: before the scheduled time, nothing fires');
+  assert.ok(result.skipped.some((s) => s.startsWith('water:before-')), 'time-gate skip recorded');
+
+  const due = await driveSweep({
+    nowMs: Date.UTC(2026, 0, 15, 4, 50, 0),
+    ctx: RICH_CTX,
+    tz: 'America/New_York',
+    times: { water: '23:50' },
+  });
+  assert.ok(due.result.delivered.includes('water'), 'due in local time → delivered');
+  assert.ok(due.markers.includes('water:daily:2026-01-14'), 'dedup marker carries the LOCAL dateKey (2026-01-14)');
+  assert.ok(due.acks.includes('local-page:water:2026-01-14'), 'ACK carries the LOCAL dateKey');
+  assert.equal(due.shown.length, 1, 'exactly one notification');
 });

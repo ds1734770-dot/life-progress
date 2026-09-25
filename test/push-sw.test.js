@@ -60,6 +60,8 @@ function makeDeps(over = {}) {
     })),
     ELIGIBILITY: eligibility,
     show: async (n) => shown.push(n),
+    // V2.2 — occurrence-ownership ACK spy (see the ACK tests below).
+    ackOccurrence: over.ackOccurrence || null,
     now: over.now || noon,
     __marked: marked,
     __shown: shown,
@@ -218,4 +220,68 @@ test('notificationOptions: same shape as the in-app buildPayload (coalescing tag
   assert.equal(n.options.data.route, '#/gym');
   assert.equal(n.options.data.app, 'life-progress');
   assert.ok(n.options.icon);
+});
+
+// ---------------------------------------------------------------------------
+// V2.2 — occurrence ownership: the SW ACKs the occurrence
+// ---------------------------------------------------------------------------
+// ACK = "the OS actually displayed the reminder", the product's handled
+// state. Every suppressed push (dedup, quiet, not-useful, invalid) must
+// NEVER ACK, or the server would stop delivering reminders the user
+// never saw — the exact bug shape Wave 1 was fixing.
+
+test('processPush: displayed reminder → occurrence ACKed with the payload identity', async () => {
+  const acked = [];
+  const deps = makeDeps({ ackOccurrence: async (id) => { acked.push(id); return true; } });
+  const r = await processPush(reminderPayload({ occurrenceId: 'dev-1:water:2026-09-14' }), deps);
+  assert.equal(r.shown, true);
+  assert.deepEqual(acked, ['dev-1:water:2026-09-14'], 'ACK fired exactly once with the canonical occurrenceId');
+  // Order invariant: the dedup marker exists by ACK time — ACK means
+  // "presented", never a promise to present.
+  assert.equal(deps.__marked.length, 1);
+});
+
+test('processPush: every suppressed push leaves the occurrence UN-ACKed', async () => {
+  const cases = [
+    {
+      name: 'already-delivered (dedup marker)',
+      deps: makeDeps({ delivered: ['water:daily:2026-09-14'] }),
+    },
+    {
+      name: 'not-useful-now (water target met)',
+      deps: makeDeps({
+        buildReminderContext: async () => ({
+          today: '2026-09-14', waterTarget: 2500, waterTotal: 2500, waterRemaining: 0,
+          journalToday: false, goalStats: { total: 4, completed: 2, pending: 2, pct: 50 },
+          streaks: { water: 3, gym: 0, goals: 5, journal: 0 }, hasWorkoutToday: false, workouts: [],
+        }),
+      }),
+    },
+    {
+      name: 'quiet-hours',
+      deps: makeDeps({ now: new Date(2026, 8, 14, 23, 0) }),
+    },
+    {
+      name: 'category-off',
+      deps: makeDeps({ prefs: { categories: { water: false } } }),
+    },
+    {
+      name: 'master-off',
+      deps: makeDeps({ prefs: { enabled: false } }),
+    },
+  ];
+  for (const { name, deps } of cases) {
+    const acked = [];
+    deps.ackOccurrence = async (id) => { acked.push(id); return true; };
+    const r = await processPush(reminderPayload({ occurrenceId: 'dev-1:water:2026-09-14' }), deps);
+    assert.equal(r.shown, false, name);
+    assert.deepEqual(acked, [], `${name}: suppressed push must NOT ACK`);
+  }
+});
+
+test('processPush: a throwing ACK never fails the already-displayed push', async () => {
+  const deps = makeDeps({ ackOccurrence: async () => { throw new Error('network down'); } });
+  const r = await processPush(reminderPayload(), deps);
+  assert.equal(r.shown, true, 'the notification was already shown; ACK failure changes nothing');
+  assert.equal(r.reason, 'reminder');
 });

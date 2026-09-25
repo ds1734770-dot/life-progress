@@ -211,6 +211,11 @@ async function handlePushEvent(event) {
       // reminder (§24 fallback hierarchy).
       resolveWallpaper: notif.resolveNotificationWallpaper,
       show: (n) => self.registration.showNotification(n.title, n.options),
+      // V2.2 — occurrence ownership: after the OS displays a reminder push,
+      // ACK the occurrence so the server never re-sends it. Reuses the same
+      // helper the in-app sweep uses; it reads deviceKey + API base from the
+      // persisted push registration (IndexedDB), which the SW can access.
+      ackOccurrence: (occurrenceId) => notif.ackPushOccurrence(occurrenceId),
     });
     // Deliberately silent outcomes (invalid payload, gates, "not useful now")
     // must NOT fall back — suppressing IS the correct behavior there. Only an

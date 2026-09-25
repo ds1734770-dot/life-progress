@@ -17,6 +17,13 @@ import {
 import { dispatchNotification, OUTCOME } from './push/dispatch.js';
 import { apnsNodeTransport } from './push/nodeHttp2.js';
 import { buildPushPayload } from './scheduler.js';
+// V2.1 FIX — ROUTES was referenced below but never imported, so every
+// categorized test push threw a ReferenceError and answered 500. Imported
+// from the shared domain module (the same source cloudflare/do.js uses) so
+// the two backends cannot drift apart again.
+import { ROUTES, occurrenceId, validateAck } from './push/domain.js';
+import { computeNextOccurrences } from '../js/timeCore.js';
+import { ackOccurrence } from './store.js';
 // V2.1 — allowlist for per-category test pushes (see /api/push/test).
 const TEST_CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
 import {
@@ -60,6 +67,19 @@ function badRequest(res, message) {
 function json(res, code, obj) {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(obj));
+}
+
+/**
+ * V2.2 — the scheduled instant (epoch ms) of the canonical occurrence
+ * `deviceKey:category:dateKey` for a subscription, computed with the SAME
+ * shared occurrence model the scheduler and the device use (js/timeCore.js:
+ * zone-correct wall-clock math over the device timezone + ledger).
+ * Returns the epoch ms, or null when the subscription has no such occurrence
+ * scheduled (unknown time/category — the caller decides policy).
+ */
+function scheduledForFor(sub, category, dateKey) {
+  const occ = computeNextOccurrences(sub, Date.now()).find((o) => o.category === category && o.dateKey === dateKey);
+  return occ ? occ.epochMs : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +151,42 @@ export async function handlePushApi(req, res, pathname) {
       if (v.error) return badRequest(res, v.error), true;
       await upsertSubscription(v.value.deviceKey, v.value);
       json(res, 200, { ok: true, deviceKey: v.value.deviceKey });
+      return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // V2.2 — POST /api/push/ack: the device reports a REAL occurrence was
+    // handled and PRESENTED locally. Writes the same deliveries-ledger row
+    // claimOccurrence() gates on → the scheduler never re-sends that push.
+    // Rejects (409) an ACK for an occurrence that is not due yet — claiming
+    // a reminder before its scheduled instant is the bug being fixed.
+    // -----------------------------------------------------------------------
+    if (method === 'POST' && pathname === '/api/push/ack') {
+      const body = JSON.parse((await readBody()) || '{}');
+      const v = validateAck(body);
+      if (v.error) return badRequest(res, v.error), true;
+      // The occurrence's scheduled instant from the SUBSCRIPTION's own
+      // schedule (the canonical shared model): zone-correct wall-clock math,
+      // identical to what the scheduler and the device computed.
+      const sub = getSubscription(v.value.deviceKey);
+      if (!sub) return json(res, 404, { ok: false, error: 'subscription not found' }), true;
+      const scheduledForMs = scheduledForFor(sub, v.value.category, v.value.dateKey);
+      const result = await ackOccurrence(v.value.occurrenceId, {
+        deviceKey: v.value.deviceKey,
+        category: v.value.category,
+        dateKey: v.value.dateKey,
+        source: v.value.source,
+        ackedAt: Date.now(),
+      }, scheduledForMs);
+      if (result === 'not-due' || result === 'unknown') {
+        json(res, 409, {
+          ok: false,
+          error: result === 'not-due' ? 'occurrence not due yet' : 'no such occurrence scheduled',
+          occurrenceId: v.value.occurrenceId,
+        });
+        return true;
+      }
+      json(res, 200, { ok: true, occurrenceId: v.value.occurrenceId, state: result });
       return true;
     }
 

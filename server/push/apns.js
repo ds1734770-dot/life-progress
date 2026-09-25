@@ -252,19 +252,45 @@ export function toApnsPayload(payloadString) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Apple `reason` strings that describe a SERVER-SIDE configuration mistake
+ * rather than a device whose token is dead.
+ *
+ * APNs returns `BadDeviceToken` when the token does not match the
+ * ENVIRONMENT — i.e. a wrong `apns-topic`/bundle id, or a development token
+ * sent to the production host (Apple's own wording: "Verify that the request
+ * contains a valid token and that the token matches the environment"). None of
+ * these mean "this device will never accept a push again".
+ *
+ * V2.1 FIX — they used to be classified GONE, and GONE DELETES the device:
+ * cloudflare/do.js#tick runs `DELETE FROM push_subscriptions`, and the Node
+ * scheduler marks the record permanently disabled. A deployment mistake
+ * (bundle-id typo, sandbox/production mix-up) therefore permanently
+ * unregistered a perfectly healthy device, silently — the classic "it
+ * registered fine, then delivery stopped and never recovered".
+ */
+const APNS_CONFIG_REASONS = /BadDeviceToken|DeviceTokenNotForTopic|TopicDisallowed|MissingTopic|InvalidProviderToken|ExpiredProviderToken/i;
+
+/**
  * Map one APNs HTTP response to a Phase 2 outcome. `reason` is Apple's
  * machine-readable `reason` field (e.g. 'Unregistered', 'BadDeviceToken').
- * Classification is deliberate: 410 + invalid/unregistered tokens are GONE;
- * 429/5xx are TRANSIENT; everything else is PERMANENT — nothing is silently
- * retried forever.
+ *
+ * Classification is deliberately conservative about deletion:
+ *  · 200                  → delivered
+ *  · 410 / `Unregistered`  → gone  (the ONLY definitive dead-token signal —
+ *                             APNs has no record of it; safe to forget)
+ *  · config/provider errors → not_configured (retain the device, record the
+ *                             error, surface it — never delete)
+ *  · 429 / 5xx             → transient (retry later)
+ *  · everything else       → permanent (keep the record, stop retrying it)
  */
 export function mapApnsResponse(status, reason = null) {
   if (status === 200) return OUTCOME.DELIVERED;
   const r = String(reason || '');
   if (status === 410) return OUTCOME.GONE;
-  if (status === 400 && /Unregistered|BadDeviceToken|DeviceTokenNotForTopic|TopicDisallowed/i.test(r)) {
-    return OUTCOME.GONE;
-  }
+  if (status === 400 && /Unregistered/i.test(r)) return OUTCOME.GONE;
+  // Configuration / provider identity — never a reason to forget a device.
+  if (APNS_CONFIG_REASONS.test(r)) return OUTCOME.NOT_CONFIGURED;
+  if (status === 401 || status === 403) return OUTCOME.NOT_CONFIGURED;
   if (status === 429 || status >= 500) return OUTCOME.TRANSIENT;
   return OUTCOME.PERMANENT;
 }

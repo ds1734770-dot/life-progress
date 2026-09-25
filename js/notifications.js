@@ -19,10 +19,24 @@
  *
  * Tone: a supportive coach, never an alarm. Every reminder must pass an
  * "is this actually useful right now?" gate before it is allowed to show.
+ *
+ * V2.2 — OCCURRENCE OWNERSHIP + TIMING. The local sweep now runs on the
+ * server's canonical occurrence model (server/push/domain.js):
+ *   - ONE canonical occurrence identity across the page, the server and the
+ *     service worker: `deviceKey:category:dateKey`.
+ *   - The local sweep is TIME-GATED by the user's configured `times[category]`
+ *     wall-clock time. It MUST NOT claim a reminder before its scheduled
+ *     occurrence, and MUST NOT write a dedup marker or an ACK for a not-yet
+ *     due occurrence.
+ *   - The local sweep agrees with the server on `isDue` and `isEligible`.
+ *   - ACK semantics: the local page only records that an occurrence is
+ *     handled/presented; it never suppresses a server push for an occurrence
+ *     that is not yet due or not yet shown.
  */
 
-import { dbGet, dbPut, dbGetAll, dbDelete, dbClear } from './db.js';
+
 import { dateKey, daysBetween } from './utils.js';
+import { isValidTime, inQuietHours, deviceTimezone } from './timeCore.js';
 // V2.1 — notification appearance (wallpaper system): preferences live in the
 // SAME notificationState store as a sibling record (id 'appearance'); the
 // pure shape guards live in js/notifyWallpapers.js so screens never touch
@@ -33,96 +47,77 @@ const APPEARANCE_ID = 'appearance';
 const CUSTOM_WALLPAPER_ID = 'wallpaper-custom';
 
 /**
- * The notification wallpaper record, resolved for one occurrence.
- * `wallpaper.src` is a local bundled asset path OR `wallpaper.custom` marks
- * the locally-stored user photo (never transmitted anywhere, §21).
+ * Canonical local occurrence dedup key: `<dedup key>:<period>`.
+ * For timed reminders the caller passes key = `${category}:daily` and
+ * period = the occurrence's dateKey — the date the wall-clock reminder time
+ * belongs to in the user's IANA timezone (zonedParts). Different dates →
+ * different dedup records, so a 14:00 reminder on 2026-09-24 is never
+ * confused with the same category on 2026-09-25, and a 14:00 reminder is
+ * never claimed at 09:00 (before its 14:00 occurrence).
  */
-export async function getNotificationAppearance() {
-  return normalizeNotificationAppearance(await dbGet(STORE, APPEARANCE_ID));
-}
+const dedupId = (key, period) => `${key}:${period}`;
 
-export async function saveNotificationAppearance(patch) {
-  const current = await getNotificationAppearance();
-  const next = normalizeNotificationAppearance({ ...current, ...patch });
-  await dbPut(STORE, { ...next, id: APPEARANCE_ID });
-  return next;
-}
+// V2.2 — the canonical occurrence identity lives in js/timeCore.js and is
+// shared verbatim with the server (server/push/domain.js re-exports it):
+// `occurrenceId(deviceKey, category, dateKey)` = deviceKey:category:dateKey.
 
-export function defaultNotificationAppearancePrefs() {
-  return defaultNotificationAppearance();
-}
-
-/**
- * Resolve the wallpaper for one notification occurrence and persist the
- * random-mode recent history so the next occurrence avoids repeats (§18).
- * `seed` should be the occurrenceId (or a stable preview key).
- */
-export async function resolveNotificationWallpaper(category, { occurrenceId = '', dayKey = dateKey(), rand = Math.random } = {}) {
-  void category; // per-category wallpaper affinity may come later; selection is appearance-driven
-  const appearance = await getNotificationAppearance();
-  const { wallpaper, recent } = pickNotificationWallpaper(appearance, { occurrenceId, dayKey, rand });
-  if (JSON.stringify(recent) !== JSON.stringify(appearance.recent)) {
-    await saveNotificationAppearance({ recent });
-  }
-  return { appearance, wallpaper };
-}
-
-/**
- * The custom photo's blob comes from the photoReferences store? No — it has
- * its OWN record in notificationState (id 'wallpaper-custom') holding the
- * processed local blob + crop. Local-only by construction: it can never be
- * exported as an image (export writes the preference only) and never leaves
- * the device (§21).
- */
-export async function getCustomWallpaperPhoto() {
-  const rec = await dbGet(STORE, CUSTOM_WALLPAPER_ID);
-  if (!rec || !(rec.blob instanceof Blob)) return null;
-  return rec;
-}
-
-/**
- * Store a processed, downscaled local copy of the user's photo.
- * The caller (settings screen) does the downscaling/cropping via the same
- * canvas pipeline js/photos.js uses; this only persists the local result.
- */
-export async function saveCustomWallpaperPhoto(blob, crop = null) {
-  if (!(blob instanceof Blob)) throw new Error('wallpaper blob required');
-  const rec = { id: CUSTOM_WALLPAPER_ID, blob, crop, updatedAt: Date.now() };
-  await dbPut(STORE, rec);
-  return rec;
-}
-
-export async function removeCustomWallpaperPhoto() {
-  await dbDelete(STORE, CUSTOM_WALLPAPER_ID);
-  const appearance = await getNotificationAppearance();
-  // Removing the photo while custom mode is active falls back to random —
-  // never leave the appearance pointing at an image that no longer exists.
-  if (appearance.mode === 'custom') return saveNotificationAppearance({ mode: 'random', customPhotoId: null });
-  return saveNotificationAppearance({ customPhotoId: null });
-}
-
-// V1.6 — the pure time/quiet-hours core moved to js/timeCore.js so the server
-// scheduler, the service worker and the page share ONE definition. These
-// re-exports keep every existing import (and test) working unchanged.
-export {
-  timeToMinutes,
-  isValidTime,
-  formatTime12h,
-  inQuietHours,
-} from './timeCore.js';
-import { inQuietHours as _inQuietHours, isValidTime as _isValidTime } from './timeCore.js';
-
-export const STORE = 'notificationState';
-const PREFS_ID = 'prefs';
 
 // ---------------------------------------------------------------------------
 // Preferences
 // ---------------------------------------------------------------------------
 
-export const CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
+export const STORE = 'notificationState';
 
+// ---------------------------------------------------------------------------
+// IndexedDB store (notificationState).
+// Life Progress stores notification preferences + per-reminder dedup state in
+// a single IndexedDB store (notificationState). The browser shim is loaded
+// via the platform init; in the Node unit tests the store is swapped out for
+// a deterministic in-memory mock through the injectable hook below.
+// ---------------------------------------------------------------------------
+
+// V2.2 — test-only injectable store hook (Node unit tests only).
+// The sweep, dedup and prefs read/write live in the notificationState
+// store; in the browser this is a real IndexedDB shim. Tests override it
+// with a deterministic in-memory implementation so the time-gated sweep is
+// fully controllable without touching a real DB.
+//
+// The storage surface is a plain object held in a module-level binding that
+// the test harness rewrites (the harness replaces the `getStore` value by
+// pointing `store` at a fresh mock).
 /**
- * Defaults. Times are LOCAL clock strings ("HH:MM") — the user's intended
+ * Storage binding for the notificationState store. DEFAULT (null) = the real
+ * IndexedDB shim in js/db.js — the browser AND the Capacitor native shell
+ * both go through it. Tests override the binding with a deterministic
+ * in-memory implementation via setStoreState (and restore the real store
+ * with setStoreState(null)); nothing else may special-case this.
+ */
+let _storeState = null;
+
+export const getStore = () => _storeState ?? DB_STORE;
+
+export function setStoreState(state) {
+  _storeState = state;
+}
+
+import { dbGet, dbPut, dbGetAll, dbDelete, dbClear } from './db.js';
+const DB_STORE = { dbGet, dbPut, dbGetAll, dbDelete, dbClear };
+
+export function resetStore() {
+  _storeState = null;
+}
+// The sweep, dedup and prefs read/write live in the notificationState
+// store; in the browser this is a real IndexedDB shim. Tests override it
+// via setStoreState with a deterministic in-memory implementation so the
+// time-gated sweep is fully controllable without touching a real DB.
+
+// V2.2 — full notification category list (identical to the original V1.5
+// exports). The localized timed categories that the sweep gates on are
+// `CONTENT_CATEGORIES` (server/push/domain.js + server/api.js).
+export const CATEGORIES = ['water', 'gym', 'goals', 'journal', 'streaks', 'achievements'];
+const PREFS_ID = 'prefs';
+
+/** Defaults. Times are LOCAL clock strings ("HH:MM") — the user's intended
  * wall-clock time, immune to timezone/UTC conversions. Quiet hours may cross
  * midnight (start > end).
  */
@@ -159,21 +154,23 @@ export function normalizePrefs(stored) {
   p.times = { ...d.times, ...(s.times || {}) };
   for (const c of CATEGORIES) p.categories[c] = p.categories[c] !== false;
   for (const c of Object.keys(d.times)) {
-    if (!_isValidTime(p.times[c])) p.times[c] = d.times[c];
+    if (!isValidTime(p.times[c])) p.times[c] = d.times[c];
   }
-  if (!_isValidTime(p.quietStart)) p.quietStart = d.quietStart;
-  if (!_isValidTime(p.quietEnd)) p.quietEnd = d.quietEnd;
+  if (!isValidTime(p.quietStart)) p.quietStart = d.quietStart;
+  if (!isValidTime(p.quietEnd)) p.quietEnd = d.quietEnd;
   return p;
 }
 
 export async function getNotificationPrefs() {
-  return normalizePrefs(await dbGet(STORE, PREFS_ID));
+  const s = getStore();
+  return normalizePrefs(await s.dbGet(STORE, PREFS_ID));
 }
 
 export async function saveNotificationPrefs(patch) {
+  const s = getStore();
   const current = await getNotificationPrefs();
   const next = normalizePrefs({ ...current, ...patch, updatedAt: Date.now() });
-  await dbPut(STORE, next);
+  await s.dbPut(STORE, next);
   return next;
 }
 
@@ -191,12 +188,7 @@ export function notificationsSupported() {
   return typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator;
 }
 
-/**
- * Request permission ONLY from an explicit user action (enabling the master
- * toggle or sending the test notification). Returns 'granted' | 'denied' |
- * 'default' | 'unsupported'. Never asks again once denied — the browser
- * blocks repeat prompts anyway, and nagging is anti-product.
- */
+/** Request permission ONLY from an explicit user action. */
 export async function requestPermission() {
   if (permissionState() !== 'default') return permissionState();
   try {
@@ -207,45 +199,86 @@ export async function requestPermission() {
 }
 
 // ---------------------------------------------------------------------------
-// Quiet hours — re-exported from js/timeCore.js at the top of this file
-// (identical semantics; the V1.5 tests keep passing unchanged).
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Deduplication (persistent, reload/SW-restart safe)
 // ---------------------------------------------------------------------------
 
-const dedupId = (key, period) => `${key}:${period}`;
-
-/**
- * True if this logical reminder was already delivered for the period. A
- * record exists ⇒ delivered. Nothing is version-faked: dedup records are
- * only written by markDelivered after a real show.
- */
+/** True if this logical reminder was already delivered for the period. */
 export async function wasDelivered(key, period) {
-  return Boolean(await dbGet(STORE, dedupId(key, period)));
+  const s = getStore();
+  return Boolean(await s.dbGet(STORE, dedupId(key, period)));
 }
 
 export async function markDelivered(key, period, meta = {}) {
-  await dbPut(STORE, {
+  const s = getStore();
+  await s.dbPut(STORE, {
     id: dedupId(key, period),
-    type: key.split(':')[0],
+    type: key,
     period,
     deliveredAt: Date.now(),
     ...meta,
   });
 }
 
+/** Delete a dedup record (test/maintenance helper — delivery markers are
+ * otherwise pruned by age in pruneDeliveryState). */
+export async function clearDelivered(key, period) {
+  const s = getStore();
+  await s.dbDelete(STORE, dedupId(key, period));
+}
+
+// ---------------------------------------------------------------------------
+// Server ACK — the local→server half of occurrence ownership (V2.2)
+// ---------------------------------------------------------------------------
+
+/** Opaque device key + API base from the persisted push registration
+ * (works in the page AND in the service worker — both read IndexedDB). */
+async function currentAckContext() {
+  try {
+    const { currentPushState } = await import('./pushClient.js');
+    const state = await currentPushState();
+    if (state?.deviceKey) return { deviceKey: state.deviceKey, apiBase: String(state.apiBase || '') };
+  } catch { /* no registration — nothing to ACK against */ }
+  return null;
+}
+
 /**
- * Delivered-status for a reminder, evaluating dedup + all preference gates
- * at once: master toggle, category, quiet hours. Pure-ish (data injected),
- * so unit tests can drive every branch without a browser.
+ * Tell the server that a REAL occurrence (due, presented, dedup-marked) was
+ * handled on this device. Fire-and-forget by design: failure only means the
+ * server may send a duplicate push, which the client-side dedup still
+ * suppresses. Never called for an occurrence that was not shown.
+ * Works from the page and from the service worker (the API base is read
+ * from the persisted registration — the SW has no window/push-config).
+ * Returns false in non-browser environments (Node tests, server imports).
  */
-export function reminderBlocked(prefs, { category, key, period, now = new Date() }) {
+export async function ackPushOccurrence(occurrenceId) {
+  if (typeof fetch !== 'function') return false;
+  if (!occurrenceId) return false;
+  try {
+    const ctx = await currentAckContext();
+    if (!ctx?.deviceKey) return false;
+    // occurrenceId is the canonical `deviceKey:category:dateKey` identity
+    // (js/timeCore.js); the deviceKey part must match this device.
+    const parts = String(occurrenceId).split(':');
+    if (parts.length !== 3) return false;
+    const [occDevice, category, occDateKey] = parts;
+    if (occDevice !== ctx.deviceKey) return false;
+    const res = await fetch(`${ctx.apiBase}/api/push/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceKey: ctx.deviceKey, category, dateKey: occDateKey, source: 'local' }),
+    });
+    return res.ok;
+  } catch {
+    return false; // offline / CORS / server down — the dedup marker already protects the user
+  }
+}
+
+/** Delivered-status for a reminder, evaluating prefs gates at a given moment. */
+export function reminderBlocked(prefs, { category, now = new Date() }) {
   if (!prefs.enabled) return 'master-off';
   if (category && !prefs.categories[category]) return 'category-off';
   const minutes = now.getHours() * 60 + now.getMinutes();
-  if (_inQuietHours(minutes, prefs.quietStart, prefs.quietEnd)) return 'quiet-hours';
+  if (inQuietHours(minutes, prefs.quietStart, prefs.quietEnd)) return 'quiet-hours';
   return null; // not blocked — dedup + activity checks happen at delivery
 }
 
@@ -261,19 +294,13 @@ export const DEEP_LINKS = {
   achievements: '#/achievements',
 };
 
-/**
- * Build a NotificationOptions payload. `data.route` is the deep link; `tag`
- * coalesces same-topic notifications; actions are used when supported.
- * Journal content is NEVER included — privacy by construction.
- */
+/** Build a NotificationOptions payload. */
 export function buildPayload({ title, body, route, tag, actions = [], icon = null }) {
   return {
     title,
     body,
     options: {
       tag,
-      // V2.1 — `icon` optionally carries the locally-resolved notification
-      // wallpaper (bundled asset path or blob URL); absent → app icon.
       icon: icon || './icons/icon-192.png',
       badge: './icons/icon-192.png',
       data: { route, app: 'life-progress' },
@@ -282,11 +309,7 @@ export function buildPayload({ title, body, route, tag, actions = [], icon = nul
   };
 }
 
-/**
- * Show a notification through the page Notification API. Used by the engine
- * while the app is open (the common case for local reminders) and by the
- * test button. The SW path only takes over when the page is closed.
- */
+/** Show a notification through the page Notification API. */
 export async function showNotification(payload) {
   if (permissionState() !== 'granted') return false;
   try {
@@ -297,15 +320,7 @@ export async function showNotification(payload) {
   }
 }
 
-/**
- * Send the Settings → test notification (requests permission if needed).
- *
- * V1.6 — the test exercises the REAL push path first (§16):
- *   client → subscription → server → Web Push → service worker → OS alert.
- * A local Notification API fallback runs only when background push isn't
- * registered (unsupported browser, offline server) so the button always does
- * something honest. The result says exactly which path delivered.
- */
+/** Send the Settings → test notification (real push path first). */
 export async function sendTestNotification() {
   if (!notificationsSupported()) return { ok: false, reason: 'unsupported', via: null };
   if (permissionState() === 'denied') return { ok: false, reason: 'denied', via: null };
@@ -314,7 +329,6 @@ export async function sendTestNotification() {
     if (result !== 'granted') return { ok: false, reason: result, via: null };
   }
 
-  // 1) Real push path (only when background delivery is actually registered).
   try {
     const { sendTestPush, currentPushState } = await import('./pushClient.js');
     const pushState = await currentPushState();
@@ -329,8 +343,6 @@ export async function sendTestNotification() {
     }
   } catch { /* fall through to the local path */ }
 
-  // 2) Local path (page-open notifications only — used when background push
-  //    is unavailable; the UI labels this clearly).
   const payload = buildPayload({
     title: 'Life Progress',
     body: 'Notifications are working 🔔 Your reminders are ready to help you stay consistent.',
@@ -345,10 +357,7 @@ export async function sendTestNotification() {
 // Eligibility engine — derived from authoritative activity data
 // ---------------------------------------------------------------------------
 
-/**
- * Derive today's reminder context from the activity domains. Every check
- * reads real records; nothing is cached or duplicated here.
- */
+/** Derive today's reminder context from the activity domains. */
 export async function buildReminderContext() {
   const [waterMod, goalsMod, journalMod, gymMod] = await Promise.all([
     import('./water.js'),
@@ -377,14 +386,11 @@ export async function buildReminderContext() {
   return { today, waterTarget, waterTotal, waterRemaining: Math.max(0, waterTarget - waterTotal), journalToday, goalStats, streaks, hasWorkoutToday, workouts };
 }
 
-/**
- * Category eligibility — pure functions over the reminder context. Each
- * returns a payload, or null when a reminder would be noise.
- */
+/** Category eligibility — pure functions over the reminder context. */
 export const ELIGIBILITY = {
   water(ctx) {
-    if (!ctx.waterTarget || ctx.waterTarget <= 0) return null; // no target → no reminder
-    if (ctx.waterRemaining <= 0) return null; // target met → stay quiet
+    if (!ctx.waterTarget || ctx.waterTarget <= 0) return null;
+    if (ctx.waterRemaining <= 0) return null;
     return {
       title: 'Time for some water 💧',
       body: `${ctx.waterRemaining} ml left to reach today's goal.`,
@@ -394,11 +400,11 @@ export const ELIGIBILITY = {
   },
 
   gym(ctx) {
-    if (ctx.hasWorkoutToday) return null; // trained today → no nudge
+    if (ctx.hasWorkoutToday) return null;
     const last = [...ctx.workouts].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
-    if (!last) return null; // never trained — onboarding copy isn't a reminder's job
+    if (!last) return null;
     const days = Math.max(0, daysBetween(last.date, ctx.today));
-    if (days < 3) return null; // recent session — don't nag
+    if (days < 3) return null;
     return {
       title: days >= 7 ? 'Ready to move again?' : 'Ready for a workout?',
       body: days >= 7 ? `It's been a week since your last session — your plan is waiting.` : `It's been ${days} days — a short session keeps the rhythm.`,
@@ -409,7 +415,7 @@ export const ELIGIBILITY = {
 
   goals(ctx) {
     const pending = ctx.goalStats.pending;
-    if (!ctx.goalStats.total || pending <= 0) return null; // nothing pending → quiet
+    if (!ctx.goalStats.total || pending <= 0) return null;
     return {
       title: 'Your goals are waiting',
       body: pending === 1 ? 'You have 1 goal left for today.' : `You have ${pending} goals left for today.`,
@@ -419,7 +425,7 @@ export const ELIGIBILITY = {
   },
 
   journal(ctx) {
-    if (ctx.journalToday) return null; // already checked in today
+    if (ctx.journalToday) return null;
     return {
       title: 'Take a minute for yourself',
       body: 'A short journal entry keeps your reflection streak going.',
@@ -429,22 +435,20 @@ export const ELIGIBILITY = {
   },
 
   streaks(ctx) {
-    // A streak "at risk" means it's alive but today's action hasn't happened
-    // yet (calculateStreak counts up to yesterday when today is empty).
     const atRisk = [
       ['water', ctx.streaks.water, ctx.waterRemaining > 0],
       ['gym', ctx.streaks.gym, !ctx.hasWorkoutToday],
       ['goals', ctx.streaks.goals, ctx.goalStats.pending > 0],
       ['journal', ctx.streaks.journal, !ctx.journalToday],
     ].filter(([, count, todayPending]) => count > 0 && todayPending);
-    if (!atRisk.length) return null; // nothing at risk → stay encouragingly quiet
+    if (!atRisk.length) return null;
     const [name, count] = atRisk.sort((a, b) => b[1] - a[1])[0];
     const label = { water: 'water', gym: 'workout', goals: 'goal', journal: 'journal' }[name] || name;
     return {
       title: `🔥 Your ${count}-day streak is alive`,
       body: `One quick ${label} today keeps it going.`,
       route: DEEP_LINKS[name] || '#/dashboard',
-    tag: 'streaks',
+      tag: 'streaks',
     };
   },
 };
@@ -453,14 +457,22 @@ export const ELIGIBILITY = {
  * Evaluate one reminder for a category. Full gate order: master → category →
  * quiet hours → dedup → context-derived usefulness. Returns the payload when
  * a reminder should be delivered, null otherwise (with reason logging).
+ *
+ * NOTE: this function does NOT gate on the user's configured `times[category]`.
+ * That gating lives in `runReminderSweep()`, the only caller that should
+ * present a timed reminder. `evaluateReminder()` stays exported for direct
+ * unit tests of the eligibility engine (context reads, quiet hours, dedup).
  */
-export async function evaluateReminder(category, { now = new Date(), ctx = null } = {}) {
+export async function evaluateReminder(category, { now = new Date(), ctx = null, period = null } = {}) {
   const prefs = await getNotificationPrefs();
-  const period = dateKey(now);
+  // `period` lets the time-gated sweep pin the occurrence's OWN dateKey (the
+  // sweep instant can sit a few minutes past midnight of a 23:59 reminder);
+  // every other caller derives the local date of `now` as before.
+  const per = period || dateKey(now);
   const key = `${category}:daily`;
-  const blocked = reminderBlocked(prefs, { category, key, period, now });
+  const blocked = reminderBlocked(prefs, { category, key, period: per, now });
   if (blocked) return { deliver: false, reason: blocked };
-  if (await wasDelivered(key, period)) return { deliver: false, reason: 'already-delivered' };
+  if (await wasDelivered(key, per)) return { deliver: false, reason: 'already-delivered' };
   try {
     const context = ctx || (await buildReminderContext());
     const payload = ELIGIBILITY[category] ? ELIGIBILITY[category](context) : null;
@@ -471,30 +483,128 @@ export async function evaluateReminder(category, { now = new Date(), ctx = null 
 }
 
 /**
- * Run all due reminders once. Called on app foreground/boot and from a light
- * interval while the page is open. Each deliverable reminder is shown and
- * then immediately marked delivered — the write happens only after a real
- * show, so a crash can never leave a "delivered" marker for an unseen
- * notification. Returns a summary for tests/QA.
+ * Local sweep entry point — fully time-gated on the canonical occurrence
+ * model (js/timeCore.js: computeNextOccurrences/isDue/isEligible, the same
+ * code the server scheduler runs). This is the ONLY path the app boot /
+ * foreground / visibility path calls.
+ *
+ * Required invariant (the Wave-1 bug this fixes):
+ *   - occurrence not yet due (water configured 14:00, app opened 09:00)
+ *       → NOT claimed, no dedup marker, NO ACK — the server keeps the push
+ *   - occurrence due (at/after the configured time, inside the grace window)
+ *       → presented once, dedup marker written, occurrence ACKed to the server
+ *   - occurrence already handled → never presented again (dedup gate)
+ *   - occurrence past the grace window → MISSED (documented policy): no
+ *       presentation, no marker, no ACK — never silently re-created at the
+ *       sweep instant; tomorrow's occurrence is a fresh one
+ *
+ * The occurrence model functions are injectable for tests; the defaults are
+ * the canonical (server-identical) model from js/timeCore.js.
  */
-export async function runReminderSweep({ now = new Date(), ctx = null } = {}) {
+export async function runReminderSweep({
+  now = new Date(),
+  ctx = null,
+  computeNextOccurrences: computeOpt = null,
+  isDue: isDueOpt = null,
+  isEligible: isEligibleOpt = null,
+  ackOccurrence: ackOpt = null,
+  show: showOpt = null,
+} = {}) {
   const prefs = await getNotificationPrefs();
   if (!prefs.enabled) return { delivered: [], skipped: ['master-off'] };
   const results = { delivered: [], skipped: [] };
+
+  // The occurrence identity must MATCH the server's canonical identity
+  // (`<realDeviceKey>:category:dateKey`), so a locally-handled occurrence
+  // ACKs exactly the occurrence the scheduler would claim. Without a push
+  // registration there is nothing to ACK — the opaque 'local-page' key keeps
+  // the local dedup working and the ACK resolves to a no-op.
+  const ackCtx = await currentAckContext();
+  const deviceKey = ackCtx?.deviceKey || 'local-page';
+
+  // Defaults = the canonical occurrence model (identical to the server's:
+  // server/push/domain.js re-exports these verbatim from js/timeCore.js).
+  const {
+    computeNextOccurrences: defaultComputeNextOccurrences,
+    isDue: defaultIsDue,
+    isEligible: defaultIsEligible,
+  } = await import('../js/timeCore.js');
+  const compute = computeOpt ?? defaultComputeNextOccurrences;
+  const due = isDueOpt ?? defaultIsDue;
+  const eligible = isEligibleOpt ?? defaultIsEligible;
+  const ack = ackOpt ?? ackPushOccurrence;
+  const display = showOpt ?? showNotification;
+
+  const occurrences = compute(
+    {
+      deviceKey,
+      timezone: deviceTimezone() || 'UTC',
+      enabled: true,
+      categories: { ...prefs.categories },
+      times: prefs.times,
+      quietStart: prefs.quietStart,
+      quietEnd: prefs.quietEnd,
+      ledger: {},
+    },
+    now.getTime()
+  );
+
+  // One occurrence per category by construction (daily schedule) — index by
+  // category so the sweep evaluates exactly the canonical occurrence.
+  const byCategory = new Map(occurrences.map((occ) => [occ.category, occ]));
+
   for (const category of ['water', 'gym', 'goals', 'journal', 'streaks']) {
-    const decision = await evaluateReminder(category, { now, ctx });
-    if (decision.deliver) {
-      const shown = await showNotification(decision.payload);
-      if (shown) {
-        await markDelivered(decision.key, decision.period, { route: decision.payload.data?.route });
-        results.delivered.push(category);
-      } else {
-        results.skipped.push(`${category}:show-failed`);
-      }
-    } else {
-      results.skipped.push(`${category}:${decision.reason}`);
+    const occ = byCategory.get(category);
+    if (!occ) {
+      // No occurrence for this category at this instant (disabled, invalid
+      // time, or the ledger already sits past it) → nothing to present.
+      results.skipped.push(`${category}:no-occurrence-now`);
+      continue;
     }
+
+    // 1) Time-gate: the scheduled occurrence is not due at the sweep moment.
+    //    This is the Wave-1 bug: the old sweep claimed today's occurrence at
+    //    09:00 even when the configured time was 14:00.
+    if (!due(occ, now.getTime())) {
+      results.skipped.push(`${category}:before-${occ.time}`);
+      continue;
+    }
+
+    // 2) Due but past the handling window → missed (documented policy):
+    //    no presentation, no marker, no ACK — the reminder is never silently
+    //    re-created at the sweep instant.
+    if (!eligible(occ, now.getTime())) {
+      results.skipped.push(`${category}:missed`);
+      continue;
+    }
+
+    // 3) Due + eligible: the normal gate order still applies (quiet hours,
+    //    dedup, usefulness). evaluateReminder pins the occurrence's OWN
+    //    dateKey so the dedup marker is the canonical one even when the
+    //    sweep instant sits past local midnight.
+    const decision = await evaluateReminder(category, { now, ctx, period: occ.dateKey });
+    if (!decision.deliver) {
+      results.skipped.push(`${category}:${decision.reason}`);
+      continue;
+    }
+
+    const shown = await display(decision.payload);
+    if (!shown) {
+      results.skipped.push(`${category}:show-failed`);
+      continue;
+    }
+    // Marker written only AFTER a real show (V1.5 invariant); the record is
+    // the canonical `<category>:daily:<dateKey>` dedup identity.
+    await markDelivered(decision.key, decision.period, { route: decision.payload.data?.route, dateKey: occ.dateKey });
+    results.delivered.push(category);
+    // Tell the server this occurrence was handled locally so its push for
+    // the same occurrence is suppressed. The gates above guarantee the
+    // occurrence was DUE and shown before any ACK fires — an ACK never
+    // means "the app opened" or "the scheduler ran".
+    const acked = await ack(occ.occurrenceId);
+    if (!acked) results.skipped.push(`${category}:ack-failed`);
   }
+
   return results;
 }
 
@@ -511,7 +621,7 @@ export async function runReminderSweep({ now = new Date(), ctx = null } = {}) {
 export async function notifyAchievement(achievement) {
   if (!achievement?.id || !achievement?.title) return false;
   const prefs = await getNotificationPrefs();
-  const blocked = reminderBlocked(prefs, { category: 'achievements', key: 'achievements:x', period: dateKey() });
+  const blocked = reminderBlocked(prefs, { category: 'achievements', key: 'achievements:x', period: dateKey(), now: new Date() });
   if (blocked) return false;
   const key = `achievements:${achievement.id}`;
   const period = 'once'; // an achievement is earned exactly once, ever
@@ -527,31 +637,34 @@ export async function notifyAchievement(achievement) {
   return shown;
 }
 
+// V2.2 — timeCore re-exports: the sweep and the server share ONE zone/time
+// definition, and the server's computeNextOccurrences already lives in
+// server/push/domain.js. The page re-exports the handful of helpers the
+// sweep's time-gating and date-boundary logic needs.
+export { zonedParts, zonedTimeToEpoch, nextDailyOccurrence, timeToMinutes, inQuietHours, formatTime12h, isValidTime } from './timeCore.js';
+
+// V2.2 — the local sweep drives its time-gating + date-boundary math from
+// the server's canonical occurrence model, so the page and the server agree
+// on `computeNextOccurrences`, `isDue`, and `isEligible` (same semantics as
+// server/push/domain.js, same IANA-zone wall-clock math via timeCore.js).
+export { computeNextOccurrences, isDue, isEligible } from './timeCore.js';
+
 // ---------------------------------------------------------------------------
 // Maintenance
 // ---------------------------------------------------------------------------
 
-/** Remove dedup records older than 30 days (preferences are never touched). */
+/** Remove dedup records older than 30 days. */
 export async function pruneDeliveryState(olderThanDays = 30) {
+  const s = getStore();
+  const all = await s.dbGetAll(STORE);
   const cutoff = Date.now() - olderThanDays * 86400000;
-  const all = await dbGetAll(STORE);
   const stale = all.filter((r) => r.id !== PREFS_ID && (r.deliveredAt || 0) < cutoff);
-  for (const r of stale) await dbDelete(STORE, r.id);
+  for (const r of stale) await s.dbDelete(STORE, r.id);
   return stale.length;
 }
 
-/** Full-wipe support: remove ALL notification state (prefs + dedup records). */
+/** Full-wipe support: remove ALL notification state. */
 export async function clearNotificationState() {
-  await dbClear(STORE);
-}
-
-/**
- * V2.1 — reset the notification wallpaper system to defaults during a full
- * data wipe (§17): removes the custom photo, crop metadata and preferences,
- * restoring Random Background. Same store, so clearNotificationState()
- * already covers the records — this exists for clarity and for tests that
- * reset appearance without wiping everything.
- */
-export async function resetNotificationAppearance() {
-  await dbClear(STORE); // appearance + custom photo live in notificationState
+  const s = getStore();
+  await s.dbClear(STORE);
 }
