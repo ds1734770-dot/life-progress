@@ -115,6 +115,12 @@ public class LPMessagingService extends com.capacitorjs.plugins.pushnotification
                 0,
                 LPPresentationModel.SECONDARY_ACTION,
                 snoozePendingIntent(context, payload)).build());
+
+        // V2.1 FIX — the method declares `android.app.Notification` as its
+        // return type but never returned: javac rejected the whole module with
+        // "missing return statement", so android/app could not be assembled at
+        // all (no APK, therefore no notification, on any lifecycle state).
+        return b.build();
     }
 
     // ---- pending intents -----------------------------------------------------
