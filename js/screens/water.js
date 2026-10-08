@@ -39,7 +39,7 @@ function render(root, entries) {
     <div class="card water-hero stagger">
       <div class="ring-wrap" id="water-ring-wrap">
         ${fx.waveOrbMarkup()}
-        ${ui.ringMarkup(136, 12)}
+        ${ui.ringMarkup(136, 12, 'Water progress toward your daily goal')}
         <div class="ring-center">
           <div id="water-total" style="font-size:21px;font-weight:800;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">0</div>
           <div class="muted" style="font-size:11px;font-weight:600" id="water-pct">${displayPct}%</div>

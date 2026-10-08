@@ -207,3 +207,16 @@ test('backupDue nudges after a week, respects snooze and empty data', async () =
   assert.equal(backupDue({ lastBackupAt: now - 8 * day }, '2026-01-01', now, TODAY), true);
   assert.equal(backupDue({ lastBackupAt: now - 8 * day, backupSnoozeUntil: now + day }, '2026-01-01', now, TODAY), false);
 });
+
+test('quotes: custom lines rotate with built-ins and parse safely', async () => {
+  const { quoteOfTheDay, parseCustomQuotes, BUILT_IN_QUOTES } = await import('../js/quotes.js');
+  assert.ok(BUILT_IN_QUOTES.length >= 30);
+  assert.deepEqual(parseCustomQuotes('  a \n\n a\nb'), ['a', 'b']);
+  assert.equal(parseCustomQuotes('x'.repeat(500))[0].length, 140);
+  const d = new Date(2026, 2, 18);
+  assert.ok(BUILT_IN_QUOTES.includes(quoteOfTheDay(d, [])));
+  const seen = new Set();
+  for (let i = 0; i < 12; i++) seen.add(quoteOfTheDay(new Date(2026, 2, 1 + i), ['mine']).text);
+  assert.ok(seen.has('mine'));
+  assert.ok(seen.size > 1);
+});

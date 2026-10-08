@@ -189,9 +189,9 @@ export function openDialog({ title, message, confirmLabel = 'Confirm', danger = 
 
 const RING_CIRCUMFERENCE = 339.292;
 
-export function ringMarkup(size = 120, stroke = 10) {
+export function ringMarkup(size = 120, stroke = 10, label = 'Progress ring') {
   return `
-    <svg class="ring" width="${size}" height="${size}" viewBox="0 0 120 120">
+    <svg class="ring" width="${size}" height="${size}" viewBox="0 0 120 120" role="img" aria-label="${label}">
       <circle class="ring-track" cx="60" cy="60" r="54" stroke-width="${stroke}"></circle>
       <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="54" stroke-width="${stroke}"></circle>
     </svg>`;

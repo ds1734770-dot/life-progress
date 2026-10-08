@@ -21,6 +21,7 @@ import * as history from '../history.js';
 import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
 import * as fx from '../fx.js';
+import { quoteOfTheDay } from '../quotes.js';
 import { lifeScore, scoreTrend, scoreLabel } from '../lifeScore.js';
 import { evaluateFreezes, normalizeFreeze } from '../streakFreeze.js';
 import { backupDue, snoozeBackupNudge, exportBackup } from '../backup.js';
@@ -36,30 +37,13 @@ import {
   clamp,
 } from '../utils.js';
 
-const QUOTES = [
-  { text: 'Discipline is choosing between what you want now and what you want most.', by: 'Abraham Lincoln' },
-  { text: 'You don’t have to be extreme, just consistent.', by: '' },
-  { text: 'Small progress is still progress.', by: '' },
-  { text: 'The pain you feel today will be the strength you feel tomorrow.', by: '' },
-  { text: 'Focus on being productive instead of busy.', by: 'Tim Ferriss' },
-  { text: 'Push yourself, because no one else is going to do it for you.', by: '' },
-  { text: 'Your future is created by what you do today, not tomorrow.', by: 'Robert Kiyosaki' },
-  { text: 'The only bad workout is the one that didn’t happen.', by: '' },
-];
-
-function quoteOfTheDay() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 0);
-  const dayOfYear = Math.floor((now - start) / 86400000);
-  return QUOTES[dayOfYear % QUOTES.length];
-}
 
 export async function mount(root, params) {
   photos.revokePhotoUrls();
   const state = await loadState();
   await applyStreakFreezes(state);
   const settings = getSettings();
-  const quote = quoteOfTheDay();
+  const quote = quoteOfTheDay(new Date(), settings.customQuotes);
 
   const name = (settings.name || '').trim() || 'friend';
   const bg = settings.backgroundImage;

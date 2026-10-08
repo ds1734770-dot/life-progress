@@ -14,6 +14,7 @@ import { mountNotifications } from './notificationsSettings.js';
 import { mountNotificationAppearance } from './notificationAppearance.js';
 import * as ui from '../ui.js';
 import { exportBackup } from '../backup.js';
+import { parseCustomQuotes, CUSTOM_QUOTE_MAX, CUSTOM_QUOTES_LIMIT } from '../quotes.js';
 import * as lock from '../journalLock.js';
 import { go } from '../router.js';
 
@@ -227,6 +228,14 @@ function render(root, settings) {
           </div>
           ${ui.icon('chevron-right', 18)}
         </div>
+        <div class="settings-row pressable" data-action="edit-quotes">
+          <div class="settings-row-icon">${ui.icon('quote', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Daily quotes</div>
+            <div class="settings-row-sub">${(settings.customQuotes || []).length ? `${settings.customQuotes.length} of your own lines in rotation` : 'Add your own lines for the dashboard'}</div>
+          </div>
+          ${ui.icon('chevron-right', 18)}
+        </div>
         <div class="settings-row pressable" data-action="open-body">
           <div class="settings-row-icon">${ui.icon('scale', 18)}</div>
           <div class="settings-row-main">
@@ -315,6 +324,7 @@ function render(root, settings) {
     'water-target': () => openWaterTargetDialog(root),
     'journal-pin': () => openPinSheet(root),
     'open-body': () => go('body'),
+    'edit-quotes': () => openQuotesSheet(root),
     'export-data': exportData,
     'import-data': importData,
     'clear-data': clearData,
@@ -486,6 +496,25 @@ function openWaterTargetDialog(root) {
       render(root, getSettings());
     });
     wrap.append(input, save);
+    return wrap;
+  });
+}
+
+function openQuotesSheet(root) {
+  ui.openSheet((close) => {
+    const wrap = ui.el('div', { class: 'flex-col' });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Daily quotes'));
+    wrap.append(ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-sm)' } }, `One quote per line (up to ${CUSTOM_QUOTES_LIMIT}, ${CUSTOM_QUOTE_MAX} characters each). They appear on your dashboard, mixed with the built-in ones.`));
+    const area = ui.el('textarea', { class: 'textarea', style: { minHeight: 150 }, placeholder: 'Write something that moves you…' });
+    area.value = (getSettings().customQuotes || []).join('\n');
+    const save = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button' }, 'Save');
+    save.addEventListener('click', async () => {
+      await saveSettings({ customQuotes: parseCustomQuotes(area.value) });
+      ui.toast('Quotes saved', 'success');
+      close();
+      render(root, getSettings());
+    });
+    wrap.append(area, save);
     return wrap;
   });
 }

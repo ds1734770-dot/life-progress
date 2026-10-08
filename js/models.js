@@ -316,6 +316,7 @@ export function defaultSettings() {
     lastBackupAt: null,
     backupSnoozeUntil: null,
     journalLock: null, // { salt, hash }
+    customQuotes: [], // the user's own dashboard quotes
     backgroundImage: null, // { dataUrl, name }
     waterTarget: 3000, // ml per day
     waterUnit: 'ml', // 'ml' | 'L'

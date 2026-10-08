@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import http from 'node:http';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = process.env.CHROME_PATH || (process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'google-chrome');
 const PORT = 8090;
 const DEBUG_PORT = 9223;
 const APP_URL = `http://localhost:${PORT}/`;
