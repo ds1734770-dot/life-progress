@@ -5,7 +5,7 @@
 import { getSettings, saveSettings } from '../settings.js';
 import * as goals from '../goals.js';
 import { checkAchievementsNow } from '../celebration.js';
-import { GOAL_TYPES, GOAL_CATEGORIES, GOAL_PRIORITIES } from '../models.js';
+import { GOAL_TYPES, GOAL_CATEGORIES, GOAL_PRIORITIES, sanitizeSubtasks } from '../models.js';
 import * as ui from '../ui.js';
 import * as fx from '../fx.js';
 import { todayKey, formatDate, addDays, startOfWeekKey, formatMonth } from '../utils.js';
@@ -84,6 +84,8 @@ function render(root, state) {
           }).outerHTML}
     </section>
 
+    ${state.goals.length === 0 ? `<section class="section stagger"><h3 class="section-title" style="font-size:var(--fs-lg)">Start with an idea</h3><div class="chip-grid">${goals.GOAL_TEMPLATES.map((t, i) => `<button class="chip" data-action="goal-template" data-i="${i}">${t.emoji} ${ui.escapeHtml(t.title)}</button>`).join('')}</div></section>` : ''}
+
     <button class="btn btn-primary btn-block" data-action="add-goal" style="margin-top:var(--sp-5)">
       ${ui.icon('plus', 18)} Add goal
     </button>
@@ -100,6 +102,14 @@ function render(root, state) {
       render(root, state);
     },
     'add-goal': () => openGoalSheet(root, state, null),
+    'goal-template': async (d) => {
+      const tpl = goals.GOAL_TEMPLATES[Number(d.i)];
+      if (!tpl) return;
+      state.goals.push(await goals.addGoalFromTemplate(tpl));
+      ui.haptic();
+      ui.toast('Goal added', 'success');
+      render(root, state);
+    },
     'goal-toggle': async (d) => {
       const goal = state.goals.find((g) => g.id === d.id);
       if (!goal) return;
@@ -118,6 +128,24 @@ function render(root, state) {
         }
         ui.toast('Goal completed', 'success');
       }
+    },
+    'step-toggle': async (d) => {
+      const goal = state.goals.find((g) => g.id === d.id);
+      if (!goal) return;
+      const nowDone = goals.toggleSubtask(goal, d.step);
+      ui.haptic();
+      const p = goals.subtaskProgress(goal);
+      if (nowDone && p.all && !goals.isCompletedOn(goal)) {
+        await goals.setGoalCompleted(goal, true);
+        checkAchievementsNow();
+        render(root, state);
+        ui.toast('All steps done. Goal completed', 'success');
+        fx.confetti(root.querySelector(`[data-goal-check="${goal.id}"]`) || undefined, { count: 60, power: 0.9 });
+        return;
+      }
+      if (!nowDone && goals.isCompletedOn(goal) && !p.all) await goals.setGoalCompleted(goal, false);
+      else await goals.updateGoal(goal);
+      render(root, state);
     },
     'goal-edit': (d) => {
       const goal = state.goals.find((g) => g.id === d.id);
@@ -163,6 +191,7 @@ function goalCard(g) {
       <div class="goal-body">
         <div class="goal-title">${ui.escapeHtml(g.title)}</div>
         ${g.description ? `<div class="muted" style="font-size:var(--fs-sm);margin-top:3px">${ui.escapeHtml(g.description)}</div>` : ''}
+        ${stepsMarkup(g)}
         <div class="goal-meta">
           <span class="pill ${CATEGORY_PILL[g.category] || ''}">${ui.escapeHtml(g.category)}</span>
           ${g.priority !== 'medium' ? `<span class="pill ${priorityPill}">${g.priority} priority</span>` : ''}
@@ -173,6 +202,17 @@ function goalCard(g) {
         <button class="btn-icon" style="width:34px;height:34px" data-action="goal-edit" data-id="${g.id}" aria-label="Edit goal">${ui.icon('edit', 15)}</button>
         <button class="btn-icon" style="width:34px;height:34px" data-action="goal-delete" data-id="${g.id}" aria-label="Delete goal">${ui.icon('trash', 15)}</button>
       </div>
+    </div>`;
+}
+
+function stepsMarkup(g) {
+  const subs = g.subtasks || [];
+  if (!subs.length) return '';
+  const p = goals.subtaskProgress(g);
+  return `
+    <div class="steps">
+      <div class="steps-head"><span>${p.done}/${p.total} steps</span><div class="progress-track steps-bar"><div class="progress-fill" style="width:${Math.round((p.done / p.total) * 100)}%"></div></div></div>
+      ${subs.map((st) => `<button class="step ${goals.subtaskDone(g, st) ? 'done' : ''}" data-action="step-toggle" data-id="${g.id}" data-step="${st.id}" aria-pressed="${goals.subtaskDone(g, st)}"><span class="step-box">${ui.icon('check', 12)}</span><span class="step-text">${ui.escapeHtml(st.text)}</span></button>`).join('')}
     </div>`;
 }
 
@@ -213,6 +253,22 @@ function openGoalSheet(root, state, existing) {
     const priority = ui.el('select', { class: 'select' }, GOAL_PRIORITIES.map((p) => ui.el('option', { value: p }, p[0].toUpperCase() + p.slice(1))));
     priority.value = defaults.priority;
 
+    const steps = ui.el('textarea', { class: 'textarea', placeholder: 'Steps: one per line (optional)', style: { minHeight: 64 } });
+    steps.value = (defaults.subtasks || []).map((t) => t.text).join('\n');
+
+    if (!isEdit) {
+      const ideas = ui.el('div', { class: 'chip-grid goal-ideas' }, goals.GOAL_TEMPLATES.slice(0, 6).map((tpl) => {
+        const chip = ui.el('button', { class: 'chip', type: 'button' }, `${tpl.emoji} ${tpl.title}`);
+        chip.addEventListener('click', () => {
+          title.value = tpl.title;
+          category.value = tpl.category;
+          ui.haptic();
+        });
+        return chip;
+      }));
+      wrap.append(ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-sm)', fontWeight: 600 } }, 'Ideas'), ideas);
+    }
+
     // Auto-set sensible date ranges when the type changes.
     type.addEventListener('change', () => {
       if (type.value === 'daily') { startDate.value = today; endDate.value = today; }
@@ -231,6 +287,10 @@ function openGoalSheet(root, state, existing) {
         startDate: startDate.value || today,
         endDate: endDate.value || today,
         priority: priority.value,
+        subtasks: sanitizeSubtasks(steps.value.split('\n').map((text) => {
+          const prior = (defaults.subtasks || []).find((t) => t.text === text.trim());
+          return { id: prior?.id, text, doneDay: prior?.doneDay || null };
+        })),
       };
       const err = (await import('../models.js')).validateGoal(data);
       if (err) { error.textContent = err; return; }
@@ -251,6 +311,7 @@ function openGoalSheet(root, state, existing) {
     wrap.append(
       title,
       description,
+      steps,
       ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Category'), category]),
       ui.el('div', { class: 'field' }, [ui.el('label', { class: 'field-label' }, 'Type'), type]),
       ui.el('div', { class: 'form-grid' }, [

@@ -43,6 +43,8 @@ const ICONS = {
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+  scale: '<path d="M12 3v18M5 21h14"/><path d="M4 7h16"/><path d="m4 7-2 7a3 3 0 0 0 6 0zM20 7l-2 7a3 3 0 0 0 6 0z"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/>',
 };
 
 export function icon(name, size = 22, className = '') {

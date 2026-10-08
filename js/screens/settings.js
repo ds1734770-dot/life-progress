@@ -13,6 +13,8 @@ import { DEFAULT_LAUNCH_QUOTE, LAUNCH_QUOTE_MAX, launchQuote, sanitizeLaunchQuot
 import { mountNotifications } from './notificationsSettings.js';
 import { mountNotificationAppearance } from './notificationAppearance.js';
 import * as ui from '../ui.js';
+import { exportBackup } from '../backup.js';
+import * as lock from '../journalLock.js';
 import { go } from '../router.js';
 
 export async function mount(root, params) {
@@ -214,6 +216,28 @@ function render(root, settings) {
       </div>
     </section>
 
+    <section class="section stagger">
+      <h3 class="section-title" style="font-size:var(--fs-lg)">Privacy</h3>
+      <div class="settings-group">
+        <div class="settings-row pressable" data-action="journal-pin">
+          <div class="settings-row-icon">${ui.icon('lock', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Journal PIN</div>
+            <div class="settings-row-sub">${lock.hasPin() ? 'On. Tap to change or remove' : 'Off. Hide your journal behind a PIN'}</div>
+          </div>
+          ${ui.icon('chevron-right', 18)}
+        </div>
+        <div class="settings-row pressable" data-action="open-body">
+          <div class="settings-row-icon">${ui.icon('scale', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Body metrics</div>
+            <div class="settings-row-sub">Weight, measurements${settings.heightCm ? ` · height ${settings.heightCm} cm` : ''}</div>
+          </div>
+          ${ui.icon('chevron-right', 18)}
+        </div>
+      </div>
+    </section>
+
     <div id="notif-section"></div>
     <div id="notif-appearance"></div>
 
@@ -289,6 +313,8 @@ function render(root, settings) {
     'change-bg': changeBackground,
     'remove-bg': removeBackground,
     'water-target': () => openWaterTargetDialog(root),
+    'journal-pin': () => openPinSheet(root),
+    'open-body': () => go('body'),
     'export-data': exportData,
     'import-data': importData,
     'clear-data': clearData,
@@ -464,40 +490,47 @@ function openWaterTargetDialog(root) {
   });
 }
 
-async function exportData() {
-  try {
-    const dump = await dbExportAll(async (record) => ({
-      ...record,
-      blob: await photos.blobToDataURL(record.blob),
-      thumb: await photos.blobToDataURL(record.thumb),
-    }));
-    // V1.1: the custom avatar image is a Blob in the settings record —
-    // serialize it to a data URL so it survives the JSON round-trip.
-    const settingsRecord = dump.data.settings?.[0];
-    if (settingsRecord && settingsRecord.avatarImage instanceof Blob) {
-      settingsRecord.avatarImage = await photos.blobToDataURL(settingsRecord.avatarImage);
+function openPinSheet(root) {
+  const has = lock.hasPin();
+  ui.openSheet((close) => {
+    const wrap = ui.el('div', { class: 'flex-col' });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, has ? 'Journal PIN' : 'Set a journal PIN'));
+    wrap.append(ui.el('div', { class: 'muted', style: { fontSize: 'var(--fs-sm)' } }, 'Hides the Journal behind a PIN whenever the app is reopened. It is a privacy screen, not encryption: your entries stay readable in a backup file. If you forget the PIN, remove it by clearing app data.'));
+    const pin = ui.el('input', { class: 'input', type: 'password', inputmode: 'numeric', maxlength: String(lock.PIN_MAX), placeholder: `New PIN (${lock.PIN_MIN}-${lock.PIN_MAX} digits)`, autocomplete: 'off' });
+    const confirm = ui.el('input', { class: 'input', type: 'password', inputmode: 'numeric', maxlength: String(lock.PIN_MAX), placeholder: 'Repeat PIN', autocomplete: 'off' });
+    const error = ui.el('div', { style: { color: 'var(--danger)', fontSize: 'var(--fs-sm)', minHeight: 18 } });
+    const save = ui.el('button', { class: 'btn btn-primary btn-block', type: 'button' }, has ? 'Change PIN' : 'Turn on');
+    save.addEventListener('click', async () => {
+      if (!lock.isValidPin(pin.value)) {
+        error.textContent = `Use ${lock.PIN_MIN}-${lock.PIN_MAX} digits.`;
+        return;
+      }
+      if (pin.value !== confirm.value) {
+        error.textContent = 'PINs do not match.';
+        return;
+      }
+      await lock.setPin(pin.value);
+      ui.toast('Journal PIN saved', 'success');
+      close();
+      render(root, getSettings());
+    });
+    wrap.append(pin, confirm, error, save);
+    if (has) {
+      const remove = ui.el('button', { class: 'btn btn-ghost btn-block', type: 'button', style: { color: 'var(--danger)' } }, 'Remove PIN');
+      remove.addEventListener('click', async () => {
+        await lock.removePin();
+        ui.toast('Journal PIN removed', 'info');
+        close();
+        render(root, getSettings());
+      });
+      wrap.append(remove);
     }
-    // V2.1 — notification wallpaper prefs participate in export, but only as
-    // PREFERENCES (§17): bundled assets are not exported, and the custom
-    // photo is device-local — its blob never enters the JSON backup. If an
-    // appearance record somehow carries a blob (defensive), strip it here.
-    const appearanceRecord = dump.data.notificationState?.find((r) => r?.id === 'appearance');
-    if (appearanceRecord) appearanceRecord.recent = appearanceRecord.recent || [];
-    dump.data.notificationState = (dump.data.notificationState || []).filter((r) => r?.id !== 'wallpaper-custom');
-    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `life-progress-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-    ui.toast('Backup downloaded', 'success');
-  } catch (err) {
-    console.error(err);
-    ui.toast('Export failed.', 'danger');
-  }
+    return wrap;
+  });
+}
+
+async function exportData() {
+  await exportBackup();
 }
 
 async function importData() {

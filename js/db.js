@@ -16,7 +16,8 @@ const DB_NAME = 'life-progress-db';
 // sessions keep their exact historical shape and ids.
 // V5: adds notificationState (V1.5 notifications) — notification preferences
 // (singleton 'prefs') plus one dedup record per delivered logical reminder.
-const DB_VERSION = 5;
+// V6: adds bodyMetrics (V1.8 weight + measurements).
+const DB_VERSION = 6;
 
 export const STORES = Object.freeze({
   settings: 'settings',
@@ -41,6 +42,8 @@ export const STORES = Object.freeze({
   // (id `${type}:${periodKey}`). Eligibility is always DERIVED from the
   // authoritative activity stores; nothing here duplicates user data.
   notificationState: 'notificationState',
+  // V1.8 body metrics: weight (kg) and tape measurements (cm) over time.
+  bodyMetrics: 'bodyMetrics',
 });
 
 export const ALL_STORES = Object.values(STORES);

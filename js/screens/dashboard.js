@@ -21,6 +21,10 @@ import * as history from '../history.js';
 import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
 import * as fx from '../fx.js';
+import { lifeScore, scoreTrend, scoreLabel } from '../lifeScore.js';
+import { evaluateFreezes, normalizeFreeze } from '../streakFreeze.js';
+import { backupDue, snoozeBackupNudge, exportBackup } from '../backup.js';
+import * as lock from '../journalLock.js';
 import { go } from '../router.js';
 import {
   calculateDailyProgress,
@@ -53,6 +57,7 @@ function quoteOfTheDay() {
 export async function mount(root, params) {
   photos.revokePhotoUrls();
   const state = await loadState();
+  await applyStreakFreezes(state);
   const settings = getSettings();
   const quote = quoteOfTheDay();
 
@@ -86,12 +91,15 @@ export async function mount(root, params) {
       <div class="qa-item"><button class="qa-circle" data-action="quick-photo">${ui.icon('camera', 24)}</button><span class="qa-label">Photo</span></div>
     </section>
 
+    <section id="card-nudge"></section>
     <section id="card-progress"></section>
+    <section id="card-insights"></section>
     <section id="card-history"></section>
     <section id="card-goals"></section>
     <section id="card-water"></section>
     <section id="card-gym"></section>
     <section id="card-journal"></section>
+    <section id="card-body"></section>
   `;
 
   updateSections(root, state);
@@ -116,12 +124,31 @@ export async function mount(root, params) {
         fx.confetti(root.querySelector(`.goal-check[data-id="${d.id}"]`) || undefined, { count: 50, power: 0.8 });
       }
     },
+    'goal-template': async (d) => {
+      const tpl = goals.GOAL_TEMPLATES[Number(d.i)];
+      if (!tpl) return;
+      ui.haptic();
+      await goals.addGoalFromTemplate(tpl);
+      ui.toast('Goal added', 'success');
+      await refreshSections(root, ['progress', 'goals', 'insights']);
+    },
     'open-goals': () => go('goals'),
     'open-water': () => go('water'),
     'open-gym': () => go('gym'),
     'open-journal': () => go('journal'),
     'open-photos': () => go('photos'),
     'open-history': () => go('history'),
+    'open-insights': () => go('insights'),
+    'open-wrapped': () => go('wrapped'),
+    'open-body': () => go('body'),
+    'backup-now': async () => {
+      await exportBackup();
+      refreshSections(root, ['nudge']);
+    },
+    'backup-later': async () => {
+      await snoozeBackupNudge();
+      refreshSections(root, ['nudge']);
+    },
     'water-mini': () => openQuickWaterSheet(root),
   });
 
@@ -164,7 +191,24 @@ async function loadState() {
     journal.getAllEntries(),
     photos.getAllPhotos(),
   ]);
-  return { waterEntries, goals: goalList, workouts, journalEntries, photoList };
+  return { waterEntries, goals: goalList, workouts, journalEntries, photoList, frozenDays: getSettings().freeze?.frozenDays || [] };
+}
+
+/** Spend/earn streak freezes once per mount; persist only when something changed. */
+async function applyStreakFreezes(state) {
+  try {
+    const completed = history.completedDaySet(state, todayKey());
+    const { state: next, events } = evaluateFreezes(completed, getSettings().freeze, todayKey());
+    if (!events.length) return;
+    await saveSettings({ freeze: next });
+    state.frozenDays = next.frozenDays;
+    for (const ev of events) {
+      if (ev.type === 'used') ui.toast('❄️ A streak freeze saved your streak', 'success');
+      else if (ev.type === 'earned') ui.toast(`❄️ You earned a streak freeze (${next.banked} banked)`, 'success');
+    }
+  } catch (err) {
+    console.warn('[LifeProgress] streak freeze evaluation skipped', err);
+  }
 }
 
 function refreshHero(root) {
@@ -188,7 +232,10 @@ async function refreshSections(root, which) {
 
 function updateSections(root, state, only = null) {
   const updaters = {
+    nudge: () => renderNudgeCard(root, state),
     progress: () => renderProgressCard(root, state),
+    insights: () => renderInsightsCard(root, state),
+    body: () => renderBodyCard(root, state),
     history: () => renderHistoryCard(root, state),
     goals: () => renderGoalsCard(root, state),
     water: () => renderWaterCard(root, state),
@@ -246,7 +293,7 @@ function renderProgressCard(root, state) {
         ${fx.ringLegendMarkup(fractions)}
         <div class="streak-chip ${streak.current > 0 ? '' : 'dead'}" style="margin-top:6px;align-self:flex-start">
           ${fx.flameMarkup(streak.current, 22)}
-          ${streak.current > 0 ? `${streak.current} day streak` : 'Start a streak today'}
+          ${streak.current > 0 ? `${streak.current} day streak` : 'Start a streak today'}${normalizeFreeze(getSettings().freeze).banked ? ` · ❄️ ${normalizeFreeze(getSettings().freeze).banked}` : ''}
         </div>
       </div>
     </div>`;
@@ -268,6 +315,77 @@ function renderProgressCard(root, state) {
       /* storage unavailable — skip the one-time celebration */
     }
   }
+}
+
+function renderNudgeCard(root, state) {
+  const node = root.querySelector('#card-nudge');
+  if (!node) return;
+  const dates = [
+    ...state.waterEntries.map((e) => e.date),
+    ...state.workouts.map((e) => e.date),
+    ...state.journalEntries.map((e) => e.date),
+  ].filter(Boolean).sort();
+  if (!backupDue(getSettings(), dates[0] || null)) {
+    node.innerHTML = '';
+    return;
+  }
+  node.innerHTML = `
+    <div class="card nudge-card stagger">
+      <div class="nudge-icon">${ui.icon('shield', 22)}</div>
+      <div class="grow">
+        <div style="font-weight:700">Back up your progress</div>
+        <div class="muted" style="font-size:var(--fs-sm)">Your data lives only on this device. Save a copy so a lost phone doesn’t erase your streaks.</div>
+        <div class="flex-row" style="gap:8px;margin-top:10px">
+          <button class="btn btn-primary btn-sm" data-action="backup-now">${ui.icon('download', 15)} Back up now</button>
+          <button class="btn btn-ghost btn-sm" data-action="backup-later">Later</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderInsightsCard(root, state) {
+  const node = root.querySelector('#card-insights');
+  if (!node) return;
+  const today = todayKey();
+  const now = lifeScore(today, state);
+  const trend = scoreTrend(state, today);
+  node.innerHTML = `
+    <div class="card card-interactive insights-entry stagger" data-action="open-insights" role="button" tabindex="0" aria-label="Open Insights. Life Score ${now.score}.">
+      <div class="insights-score">${now.score}</div>
+      <div class="grow">
+        <div style="font-size:15px;font-weight:700">Life Score · ${scoreLabel(now.score)}</div>
+        <div class="muted" style="font-size:var(--fs-sm);font-weight:600">${trend.delta === 0 ? 'Level with last week' : `${trend.delta > 0 ? '▲' : '▼'} ${Math.abs(trend.delta)} vs last week`} · Insights &amp; Weekly Wrapped</div>
+      </div>
+      ${ui.icon('chevron-right', 18)}
+    </div>`;
+  node.querySelector('.insights-entry').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      go('insights');
+    }
+  });
+}
+
+function renderBodyCard(root, state) {
+  const node = root.querySelector('#card-body');
+  if (!node) return;
+  node.innerHTML = `
+    <div class="section">
+      <div class="card card-interactive hist-entry stagger" data-action="open-body" role="button" tabindex="0" aria-label="Open Body: weight and measurements">
+        <span class="hist-entry-icon">${ui.icon('scale', 20)}</span>
+        <div class="grow">
+          <div style="font-size:15px;font-weight:700">Body</div>
+          <div class="muted" style="font-size:var(--fs-sm);font-weight:600">Weight &amp; measurements</div>
+        </div>
+        ${ui.icon('chevron-right', 18)}
+      </div>
+    </div>`;
+  node.querySelector('.hist-entry').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      go('body');
+    }
+  });
 }
 
 function renderHistoryCard(root, state) {
@@ -341,6 +459,8 @@ function renderGoalsCard(root, state) {
             <div class="empty-title" style="font-size:var(--fs-md)">No goals for today</div>
             <div class="empty-sub" style="font-size:var(--fs-sm)">Add a goal to see it here.</div>
             <button class="btn btn-primary btn-sm" data-action="quick-goal">${ui.icon('plus', 15)} Add goal</button>
+            ${state.goals.length === 0 ? `<div class="muted" style="font-size:var(--fs-xs);font-weight:700;margin:14px 0 8px;text-transform:uppercase;letter-spacing:.08em">Or start with an idea</div>
+            <div class="chip-grid" style="justify-content:center">${goals.GOAL_TEMPLATES.slice(0, 4).map((t, i) => `<button class="chip" data-action="goal-template" data-i="${i}">${t.emoji} ${ui.escapeHtml(t.title)}</button>`).join('')}</div>` : ''}
           </div>`}
       </div>
     </div>`;
@@ -466,7 +586,7 @@ function renderJournalCard(root, state) {
               ${streak > 0 ? `<span class="pill pill-accent">${ui.icon('flame', 12)} ${streak} day streak</span>` : ''}
             </div>
             <div class="muted" style="font-size:var(--fs-sm);font-weight:600;margin-top:6px">${ui.escapeHtml(status)}</div>
-            ${latest && !todayEntry ? `<div class="muted" style="font-size:var(--fs-sm);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">“${ui.escapeHtml(journal.entryPreview(latest, 60))}”</div>` : ''}
+            ${latest && !todayEntry && !lock.hasPin() ? `<div class="muted" style="font-size:var(--fs-sm);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">“${ui.escapeHtml(journal.entryPreview(latest, 60))}”</div>` : ''}
           </div>
           <button class="btn-icon" data-action="quick-journal" aria-label="New journal entry">${ui.icon('plus', 20)}</button>
         </div>

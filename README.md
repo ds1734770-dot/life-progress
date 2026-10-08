@@ -14,7 +14,7 @@ and a motivational dashboard into one cohesive experience.
 
 ```bash
 npm start          # serve the app + notification backend at http://localhost:8080
-npm test           # run the Node unit tests (344)
+npm test           # run the Node unit tests
 npm run smoke      # run the full end-to-end browser test (headless Chrome)
 npm run qa         # extended QA: restart persistence, export/import, offline, mobile
 npm run icons      # regenerate the PWA icons
@@ -24,6 +24,33 @@ npm run screenshots # capture screenshots of every screen (dark + light)
 Open `http://localhost:8080` on a phone browser (or the Chrome device
 toolbar). From the browser menu you can **Add to Home Screen** — the app then
 launches full-screen like a native app and works fully offline.
+
+---
+
+## What's new in V1.7 / V1.8
+
+**Visual layer (V1.7):** four concentric activity rings, animated water waves, confetti
+(goal done, water goal, perfect day), a streak flame that grows with your streak, a
+year heatmap in History, a 14-day mood chart in Journal and five accent colours.
+
+**V1.8:**
+
+| Feature | Where |
+| --- | --- |
+| **Life Score** (0-100, same weights as the Today rings) + 14-day trend + "what moved it" | Home card, `#/insights` |
+| **Smart insights** (water vs gym days, mood vs workouts, best weekday, week-over-week) - on-device, only shown with enough data | `#/insights` |
+| **Weekly Wrapped** story + shareable PNG (Web Share or download) | `#/wrapped` |
+| **Streak freezes** - earn one per 7 complete days (bank of 2); auto-spent after a missed day that follows a 3+ day streak | Home streak chip, Insights |
+| **Muscle map** (front/back body, last 7/30 days) + neglect coaching | Gym |
+| **Plate calculator**, **estimated 1RM** in personal bests | Gym |
+| **Photo compare** fixed (left = Before), 50% start, reveal animation, keyboard slider, days-apart chip, "Play journey" | Photos -> Compare |
+| **Goal checklists** and one-tap starter goals | Goals, Home empty state |
+| **Journal**: daily prompt, gratitude mode, "On this day" memories, optional **PIN lock** (privacy screen, not encryption) | Journal, Settings -> Privacy |
+| **Body metrics**: weight and tape measurements, trend chart, optional BMI, kg/lb display | `#/body` |
+| **Backup nudge** after 7 days without a backup (snooze 3 days) | Home |
+
+Known limits: workout weights are still shown in kg (the lb toggle applies to Body only);
+the journal PIN hides the screen but does not encrypt stored entries or backup files.
 
 ---
 

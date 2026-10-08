@@ -11,7 +11,8 @@
 // would keep serving the poisoned files forever; the bump makes activate()
 // delete the stale cache and install() re-precache the corrected graph.
 // V1.19 — js/fx.js + css/fx.css (visual layer) join the precache.
-const CACHE = 'life-progress-v1.19';
+// V1.20 — Insights/Wrapped/Body screens and their pure modules join the precache.
+const CACHE = 'life-progress-v1.20';
 
 // V2.1 — the 12 built-in wallpaper files, mirrored from the registry in
 // js/notifyWallpapers.js (kept as a literal list here so the precache never
@@ -42,6 +43,19 @@ const CORE_ASSETS = [
   './js/settings.js',
   './js/ui.js',
   './js/fx.js',
+  './js/lifeScore.js',
+  './js/insights.js',
+  './js/wrapped.js',
+  './js/streakFreeze.js',
+  './js/bodyMap.js',
+  './js/bodyMetrics.js',
+  './js/gymTools.js',
+  './js/journalExtras.js',
+  './js/journalLock.js',
+  './js/backup.js',
+  './js/screens/insights.js',
+  './js/screens/wrapped.js',
+  './js/screens/body.js',
   './js/water.js',
   './js/goals.js',
   './js/gym.js',

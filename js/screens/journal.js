@@ -7,10 +7,70 @@ import * as journal from '../journal.js';
 import { checkAchievementsNow } from '../celebration.js';
 import { MOODS } from '../models.js';
 import * as ui from '../ui.js';
+import * as lock from '../journalLock.js';
+import { dailyPrompt, onThisDay, GRATITUDE_TEMPLATE } from '../journalExtras.js';
 import { go } from '../router.js';
 import { todayKey, formatDate } from '../utils.js';
 
+/** PIN keypad shown instead of the journal while it is locked. */
+function renderLock(root, onUnlock) {
+  root.innerHTML = `
+    <div class="lock-screen">
+      <div class="lock-icon">${ui.icon('lock', 30)}</div>
+      <h2 style="font-size:var(--fs-xl);font-weight:800">Journal locked</h2>
+      <div class="muted" style="font-size:var(--fs-sm)">Enter your PIN to continue</div>
+      <div class="lock-dots" id="lock-dots" aria-live="polite"></div>
+      <div class="lock-pad">
+        ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button class="lock-key" data-key="${n}">${n}</button>`).join('')}
+        <button class="lock-key lock-aux" data-key="back" aria-label="Delete">${ui.icon('arrow-left', 20)}</button>
+        <button class="lock-key" data-key="0">0</button>
+        <button class="lock-key lock-aux lock-go" data-key="go" aria-label="Unlock">${ui.icon('check', 22)}</button>
+      </div>
+      <div class="lock-error" id="lock-error" role="alert"></div>
+    </div>`;
+  let pin = '';
+  const dots = root.querySelector('#lock-dots');
+  const error = root.querySelector('#lock-error');
+  const paint = () => {
+    dots.innerHTML = Array.from({ length: Math.max(lock.PIN_MIN, pin.length) }, (_, i) => `<i class="${i < pin.length ? 'on' : ''}"></i>`).join('');
+  };
+  paint();
+  async function submit() {
+    if (!pin) return;
+    if (await lock.verifyPin(pin)) {
+      lock.markUnlocked();
+      ui.haptic(20);
+      onUnlock();
+      return;
+    }
+    error.textContent = 'Wrong PIN. Try again.';
+    pin = '';
+    paint();
+    ui.haptic([30, 40, 30]);
+    const pad = root.querySelector('.lock-screen');
+    pad.classList.remove('shake');
+    void pad.offsetWidth;
+    pad.classList.add('shake');
+  }
+  root.querySelector('.lock-pad').addEventListener('click', (e) => {
+    const k = e.target.closest('[data-key]')?.dataset.key;
+    if (!k) return;
+    error.textContent = '';
+    if (k === 'back') pin = pin.slice(0, -1);
+    else if (k === 'go') return submit();
+    else if (pin.length < lock.PIN_MAX) pin += k;
+    paint();
+    ui.haptic(6);
+    // Auto-submit at the longest length; otherwise the user taps the check.
+    if (pin.length === lock.PIN_MAX) submit();
+  });
+}
+
 export async function mount(root, params, mode) {
+  if (lock.isLocked()) {
+    renderLock(root, () => mount(root, params, mode));
+    return;
+  }
   if (mode === 'edit') {
     const entries = await journal.getAllEntries();
     const entry = params[1] ? entries.find((e) => e.id === params[1]) : null;
@@ -20,6 +80,22 @@ export async function mount(root, params, mode) {
   const entries = await journal.getAllEntries();
   const state = { entries, query: '' };
   render(root, state);
+}
+
+function memoriesMarkup(entries) {
+  const mem = onThisDay(entries);
+  if (!mem.length) return '';
+  return `
+    <section class="section stagger">
+      <div class="section-head"><h3 class="section-title" style="font-size:var(--fs-lg)">On this day</h3></div>
+      <div class="flex-col">
+        ${mem.map((m) => `<div class="card card-interactive memory" data-action="entry-edit" data-id="${m.entry.id}" role="button" tabindex="0">
+          <div class="memory-label">${ui.escapeHtml(m.label)} ${m.entry.mood || ''}</div>
+          <div style="font-weight:700">${ui.escapeHtml(m.entry.title || 'Untitled')}</div>
+          <div class="muted memory-text">${ui.escapeHtml(journal.entryPreview(m.entry, 110))}</div>
+        </div>`).join('')}
+      </div>
+    </section>`;
 }
 
 /** 14-day mood line (SVG). Hidden until there are at least two mood days. */
@@ -83,6 +159,8 @@ function render(root, state) {
         <div class="stat"><div class="stat-value">${stats.thisMonth}</div><div class="stat-label">This month</div></div>
       </div>
     </section>
+
+    ${memoriesMarkup(state.entries)}
 
     ${moodChartMarkup(state.entries)}
 
@@ -199,6 +277,10 @@ function renderEditor(root, entry) {
         <button class="btn btn-primary btn-sm" data-action="save-entry">${ui.icon('check', 15)} Save</button>
       </div>
       <input class="editor-title" id="j-title" type="text" placeholder="Title (optional)" value="${ui.escapeHtml(entry?.title || '')}" maxlength="120">
+      <div class="prompt-row" id="prompt-row">
+        <button class="chip" data-action="use-prompt" type="button">${ui.icon('sparkles', 14)} Need a prompt?</button>
+        <button class="chip" data-action="use-gratitude" type="button">🙏 Gratitude</button>
+      </div>
       <textarea class="editor-body" id="j-body" placeholder="${ui.escapeHtml(settings.journalPrompt || 'How was your day?')}">${ui.escapeHtml(entry?.content || '')}</textarea>
       <div class="section" style="margin-top:var(--sp-5)">
         <div class="section-title" style="font-size:var(--fs-md);margin-bottom:8px">How are you feeling?</div>
@@ -223,6 +305,25 @@ function renderEditor(root, entry) {
   });
 
   ui.bindActions(root, {
+    'use-prompt': () => {
+      const body = root.querySelector('#j-body');
+      const prompt = dailyPrompt();
+      body.placeholder = prompt;
+      if (!body.value.trim()) body.value = `${prompt}\n\n`;
+      body.focus();
+      body.setSelectionRange(body.value.length, body.value.length);
+      ui.haptic();
+    },
+    'use-gratitude': () => {
+      const body = root.querySelector('#j-body');
+      const title = root.querySelector('#j-title');
+      const tags = root.querySelector('#j-tags');
+      if (!body.value.trim()) body.value = GRATITUDE_TEMPLATE;
+      if (!title.value.trim()) title.value = 'Gratitude';
+      if (!/(^|,)\s*gratitude\s*(,|$)/i.test(tags.value)) tags.value = tags.value.trim() ? `${tags.value.trim()}, gratitude` : 'gratitude';
+      body.focus();
+      ui.haptic();
+    },
     back: async () => {
       const title = root.querySelector('#j-title').value.trim();
       const content = root.querySelector('#j-body').value.trim();

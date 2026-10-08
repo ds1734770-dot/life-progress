@@ -14,6 +14,7 @@ import { showOnboarding } from './onboarding.js';
 import { playLaunchExperience } from './launch.js';
 import { checkAchievementsNow } from './celebration.js';
 import { runReminderSweep, pruneDeliveryState } from './notifications.js';
+import { installAutoRelock } from './journalLock.js';
 import { isNative, getPlatform } from './platform.js';
 
 async function boot() {
@@ -34,6 +35,7 @@ async function boot() {
   }
 
   renderTabbar();
+  installAutoRelock();
 
   if (!getSettings().onboarded) {
     await showOnboarding();

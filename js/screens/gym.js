@@ -17,6 +17,8 @@ import { gymWeightUnit } from '../models.js';
 import { getSettings } from '../settings.js';
 import * as photos from '../photos.js';
 import * as ui from '../ui.js';
+import { muscleSets, bodyMapMarkup, neglectNote, REGIONS, loadLevel } from '../bodyMap.js';
+import { estimate1RM, plateBreakdown } from '../gymTools.js';
 import { go } from '../router.js';
 import { formatDate, formatDuration, todayKey } from '../utils.js';
 
@@ -80,7 +82,13 @@ function render(root, state) {
         </section>`
       : ''}
 
+    ${workouts.length ? muscleMapSection(workouts, state.mapDays || 7) : ''}
+
     ${prs.length ? personalBestsSection(prs, unit) : ''}
+
+    <section class="section stagger">
+      <button class="btn btn-ghost btn-block" data-action="plate-calc">${ui.icon('dumbbell', 16)} Plate calculator</button>
+    </section>
 
     ${workouts.length ? weeklyVolumeSection(volume, maxMinutes) : ''}
 
@@ -118,6 +126,11 @@ function render(root, state) {
       mount(root, []);
     },
     'open-history-gym': () => go('history'),
+    'plate-calc': () => openPlateCalc(),
+    'map-days': (d) => {
+      state.mapDays = Number(d.days) === 30 ? 30 : 7;
+      render(root, state);
+    },
     'open-photos': () => go('photos'),
     'open-template': (d) => go(`gym/template/${d.id}`),
     'workout-toggle': (d) => {
@@ -228,6 +241,56 @@ function recentWorkoutCard(w, unit, expanded) {
     </div>`;
 }
 
+function muscleMapSection(workouts, days) {
+  const sets = muscleSets(workouts, days);
+  const note = neglectNote(workouts);
+  const total = REGIONS.reduce((t, r) => t + sets[r], 0);
+  const ranked = REGIONS.filter((r) => sets[r] > 0).sort((a, b) => sets[b] - sets[a]);
+  return `
+    <section class="section stagger" aria-label="Muscle map">
+      <div class="section-head">
+        <h3 class="section-title" style="font-size:var(--fs-lg)">Muscle map</h3>
+        <div class="seg" style="max-width:150px">
+          <button class="seg-item" data-action="map-days" data-days="7" aria-selected="${days === 7}">7d</button>
+          <button class="seg-item" data-action="map-days" data-days="30" aria-selected="${days === 30}">30d</button>
+        </div>
+      </div>
+      <div class="card">
+        ${total ? bodyMapMarkup(sets) : `<div class="muted" style="text-align:center;padding:16px 8px;font-size:var(--fs-sm)">No sets logged in the last ${days} days. Finish a workout to light up your map.</div>`}
+        ${total ? `<div class="bm-legend" aria-hidden="true">Less <i class="bm-sw bm-l1"></i><i class="bm-sw bm-l2"></i><i class="bm-sw bm-l3"></i><i class="bm-sw bm-l4"></i> More</div>` : ''}
+        ${ranked.length ? `<div class="bm-rank">${ranked.slice(0, 5).map((r) => `<span class="pill">${r} · ${sets[r]} sets</span>`).join('')}</div>` : ''}
+        ${note ? `<div class="bm-note">${ui.icon('sparkles', 14)} ${ui.escapeHtml(note)}</div>` : ''}
+      </div>
+    </section>`;
+}
+
+function openPlateCalc() {
+  ui.openSheet(() => {
+    const wrap = ui.el('div', { class: 'flex-col' });
+    wrap.append(ui.el('h2', { style: { fontSize: 'var(--fs-xl)', fontWeight: 800 } }, 'Plate calculator'));
+    const input = ui.el('input', { class: 'input', type: 'number', inputmode: 'decimal', min: '0', step: '2.5', placeholder: 'Target weight (kg)' });
+    const bar = ui.el('select', { class: 'select' }, [20, 15, 10].map((b) => ui.el('option', { value: String(b) }, `${b} kg bar`)));
+    const out = ui.el('div', { class: 'plate-out', 'aria-live': 'polite' }, 'Enter a weight to see the plates for each side.');
+    const update = () => {
+      const r = plateBreakdown(Number(input.value), Number(bar.value));
+      if (!(Number(input.value) > 0)) {
+        out.textContent = 'Enter a weight to see the plates for each side.';
+      } else if (r.belowBar) {
+        out.textContent = `That is lighter than the ${bar.value} kg bar.`;
+      } else {
+        const counts = new Map();
+        for (const p of r.perSide) counts.set(p, (counts.get(p) || 0) + 1);
+        out.innerHTML = `<div class="plate-row">${r.perSide.length ? r.perSide.map((p) => `<span class="plate p${String(p).replace('.', '_')}">${p}</span>`).join('') : '<span class="muted">Just the bar</span>'}</div>
+          <div class="muted" style="font-size:var(--fs-sm);margin-top:8px">Per side: ${[...counts.entries()].map(([p, n]) => `${n}×${p}`).join(' + ') || 'none'}. Total ${r.achieved} kg${r.remainder ? ` (${r.remainder} kg short: smallest plate is 1.25)` : ''}.</div>`;
+      }
+    };
+    input.addEventListener('input', update);
+    bar.addEventListener('change', update);
+    wrap.append(input, bar, out);
+    return wrap;
+  });
+}
+
 function personalBestsSection(prs, unit) {
   return `
     <section class="section stagger">
@@ -240,7 +303,7 @@ function personalBestsSection(prs, unit) {
               <div class="row-sub">${formatDate(r.date, { short: true })}</div>
             </div>
             <span style="font-weight:800;font-variant-numeric:tabular-nums">${r.weight} ${unit}</span>
-            <span class="muted" style="font-size:var(--fs-sm)">× ${r.reps}</span>
+            <span class="muted" style="font-size:var(--fs-sm)">× ${r.reps}${estimate1RM(r.weight, r.reps) > r.weight ? ` · est. 1RM ${estimate1RM(r.weight, r.reps)}` : ''}</span>
           </div>`).join('')}
       </div>
     </section>`;

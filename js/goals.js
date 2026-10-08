@@ -156,3 +156,42 @@ export function todayProgressFraction(goals, key = todayKey()) {
   const done = todays.filter((g) => isCompletedOn(g, key)).length;
   return done / todays.length;
 }
+// ---------------------------------------------------------------------------
+// V1.8 - checklist steps + starter templates
+// ---------------------------------------------------------------------------
+
+export function subtaskDone(goal, sub, key = todayKey()) {
+  return goal.type === 'daily' ? sub.doneDay === key : Boolean(sub.doneDay);
+}
+
+export function subtaskProgress(goal, key = todayKey()) {
+  const subs = goal.subtasks || [];
+  const done = subs.filter((s) => subtaskDone(goal, s, key)).length;
+  return { done, total: subs.length, all: subs.length > 0 && done === subs.length };
+}
+
+/** Tick/untick a step in place; returns true when the step is now done. */
+export function toggleSubtask(goal, subId, key = todayKey()) {
+  const sub = (goal.subtasks || []).find((s) => s.id === subId);
+  if (!sub) return false;
+  sub.doneDay = subtaskDone(goal, sub, key) ? null : key;
+  return Boolean(sub.doneDay);
+}
+
+/** One-tap starter goals (daily). */
+export const GOAL_TEMPLATES = [
+  { title: 'Read for 20 minutes', category: 'Study', emoji: '📖' },
+  { title: 'Walk 8,000 steps', category: 'Fitness', emoji: '🚶' },
+  { title: 'Meditate for 10 minutes', category: 'Health', emoji: '🧘' },
+  { title: 'No sugary drinks', category: 'Health', emoji: '🥤' },
+  { title: 'Study for 1 hour', category: 'Study', emoji: '🎓' },
+  { title: 'Stretch for 10 minutes', category: 'Fitness', emoji: '🤸' },
+  { title: 'Code for 30 minutes', category: 'Coding', emoji: '💻' },
+  { title: 'Plan tomorrow', category: 'Productivity', emoji: '🗓️' },
+  { title: 'Sleep before 11 pm', category: 'Health', emoji: '😴' },
+  { title: 'Call someone I care about', category: 'Personal', emoji: '📞' },
+];
+
+export async function addGoalFromTemplate(tpl) {
+  return addGoal({ title: tpl.title, category: tpl.category, type: 'daily', priority: 'medium' });
+}

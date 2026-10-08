@@ -4,7 +4,7 @@
  */
 import * as photos from '../photos.js';
 import * as ui from '../ui.js';
-import { go } from '../router.js';
+import { go, registerCleanup } from '../router.js';
 import { todayKey, formatDate, clamp } from '../utils.js';
 import { REFERENCE_QUALITY_COPY } from '../pose/reference.js';
 import { analyzePhotoReference, NoPoseDetectedError } from '../pose/analyze.js';
@@ -396,13 +396,13 @@ function renderCompare(root, state) {
         <div class="field">
           <label class="field-label" for="cmp-before">Before</label>
           <select class="select" id="cmp-before">
-            ${photoList.map((p) => `<option value="${p.id}">${formatDate(p.date, { short: true })}${p.label ? ` · ${ui.escapeHtml(p.label)}` : ''}</option>`).join('')}
+            ${photoList.map((p) => `<option value="${p.id}" ${p.id === before.id ? 'selected' : ''}>${formatDate(p.date, { short: true })}${p.label ? ` · ${ui.escapeHtml(p.label)}` : ''}</option>`).join('')}
           </select>
         </div>
         <div class="field">
           <label class="field-label" for="cmp-after">After</label>
           <select class="select" id="cmp-after">
-            ${photoList.map((p) => `<option value="${p.id}">${formatDate(p.date, { short: true })}${p.label ? ` · ${ui.escapeHtml(p.label)}` : ''}</option>`).join('')}
+            ${photoList.map((p) => `<option value="${p.id}" ${p.id === after.id ? 'selected' : ''}>${formatDate(p.date, { short: true })}${p.label ? ` · ${ui.escapeHtml(p.label)}` : ''}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -410,11 +410,18 @@ function renderCompare(root, state) {
 
     <section class="section stagger">
       <div class="compare" id="compare-stage">
-        <img class="compare-img" id="cmp-back" alt="Before" src="">
-        <img class="compare-img compare-top" id="cmp-front" alt="After" src="">
+        <img class="compare-img" id="cmp-back" alt="After" src="">
+        <img class="compare-img compare-top" id="cmp-front" alt="Before" src="">
         <span class="compare-label before" id="cmp-label-before">Before</span>
         <span class="compare-label after" id="cmp-label-after">After</span>
-        <div class="compare-divider" id="cmp-divider"><div class="compare-handle">${ui.icon('chevron-left', 14)}${ui.icon('chevron-right', 14)}</div></div>
+        <div class="compare-divider" id="cmp-divider" role="slider" tabindex="0" aria-label="Before and after split" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"><div class="compare-handle">${ui.icon('chevron-left', 14)}${ui.icon('chevron-right', 14)}</div></div>
+      </div>
+      <div class="flex-between" style="margin-top:var(--sp-3)">
+        <span class="pill pill-accent" id="cmp-gap"></span>
+        <div class="flex-row" style="gap:8px">
+          <button class="btn btn-ghost btn-sm" data-action="cmp-sweep">${ui.icon('refresh', 15)} Reveal</button>
+          <button class="btn btn-primary btn-sm" data-action="cmp-play" ${photoList.length < 3 ? 'disabled' : ''}>${ui.icon('timer', 15)} Play journey</button>
+        </div>
       </div>
     </section>
   `;
@@ -427,10 +434,14 @@ function renderCompare(root, state) {
     const beforePhoto = photoList.find((p) => p.id === root.querySelector('#cmp-before').value);
     const afterPhoto = photoList.find((p) => p.id === root.querySelector('#cmp-after').value);
     if (!beforePhoto || !afterPhoto) return;
-    backImg.src = photos.photoUrl(beforePhoto, 'blob') || photos.photoUrl(beforePhoto, 'thumb');
-    frontImg.src = photos.photoUrl(afterPhoto, 'blob') || photos.photoUrl(afterPhoto, 'thumb');
+    // The clipped top layer is the LEFT side, so it carries "Before" (matches
+    // the labels); the full-width layer underneath is "After" on the right.
+    frontImg.src = photos.photoUrl(beforePhoto, 'blob') || photos.photoUrl(beforePhoto, 'thumb');
+    backImg.src = photos.photoUrl(afterPhoto, 'blob') || photos.photoUrl(afterPhoto, 'thumb');
     root.querySelector('#cmp-label-before').textContent = formatDate(beforePhoto.date, { short: true });
     root.querySelector('#cmp-label-after').textContent = formatDate(afterPhoto.date, { short: true });
+    const gap = Math.round((new Date(afterPhoto.date + 'T12:00:00') - new Date(beforePhoto.date + 'T12:00:00')) / 86400000);
+    root.querySelector('#cmp-gap').textContent = gap === 0 ? 'Same day' : `${Math.abs(gap)} day${Math.abs(gap) === 1 ? '' : 's'} apart`;
   }
 
   root.querySelector('#cmp-before').addEventListener('change', apply);
@@ -440,12 +451,66 @@ function renderCompare(root, state) {
   // Drag interaction.
   const divider = root.querySelector('#cmp-divider');
   let dragging = false;
-  const setSplit = (clientX) => {
-    const rect = stage.getBoundingClientRect();
-    const pct = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
+  const setPct = (pct) => {
     frontImg.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
     divider.style.left = `${pct}%`;
+    divider.setAttribute('aria-valuenow', String(Math.round(pct)));
   };
+  const setSplit = (clientX) => {
+    const rect = stage.getBoundingClientRect();
+    setPct(clamp(((clientX - rect.left) / rect.width) * 100, 0, 100));
+  };
+  setPct(50); // start at the middle so the divider is visible immediately
+  let raf = 0;
+  let playTimer = null;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /** Ease the divider 0 -> 100 -> 50 as a small reveal. */
+  function sweep() {
+    cancelAnimationFrame(raf);
+    if (reduced) return setPct(50);
+    const t0 = performance.now();
+    const DUR = 1800;
+    const frame = (now) => {
+      const t = Math.min(1, (now - t0) / DUR);
+      const e = 1 - Math.pow(1 - t, 3);
+      setPct(t < 0.6 ? (e / (1 - Math.pow(1 - 0.6, 3))) * 100 : 100 - ((t - 0.6) / 0.4) * 50);
+      if (t < 1) raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+  }
+  /** Step through every photo oldest -> newest against the first one. */
+  function playJourney() {
+    clearInterval(playTimer);
+    const ordered = [...photoList].reverse();
+    const beforeSel = root.querySelector('#cmp-before');
+    const afterSel = root.querySelector('#cmp-after');
+    beforeSel.value = ordered[0].id;
+    let i = 1;
+    setPct(100);
+    const tick = () => {
+      if (i >= ordered.length) {
+        clearInterval(playTimer);
+        sweep();
+        return;
+      }
+      afterSel.value = ordered[i].id;
+      apply();
+      i++;
+    };
+    tick();
+    playTimer = setInterval(tick, 1300);
+  }
+  registerCleanup(() => {
+    cancelAnimationFrame(raf);
+    clearInterval(playTimer);
+  });
+  divider.addEventListener('keydown', (e) => {
+    const cur = Number(divider.getAttribute('aria-valuenow')) || 50;
+    if (e.key === 'ArrowLeft') setPct(clamp(cur - 5, 0, 100));
+    else if (e.key === 'ArrowRight') setPct(clamp(cur + 5, 0, 100));
+    else return;
+    e.preventDefault();
+  });
   stage.addEventListener('pointerdown', (e) => {
     dragging = true;
     stage.setPointerCapture(e.pointerId);
@@ -457,7 +522,8 @@ function renderCompare(root, state) {
   stage.addEventListener('pointerup', () => (dragging = false));
   stage.addEventListener('pointercancel', () => (dragging = false));
 
-  ui.bindActions(root, { back: () => go('photos') });
+  ui.bindActions(root, { back: () => go('photos'), 'cmp-sweep': sweep, 'cmp-play': playJourney });
+  setTimeout(sweep, 350);
 }
 
 /**

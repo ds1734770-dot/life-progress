@@ -19,6 +19,9 @@ import { mount as mountAchievements } from './screens/achievements.js';
 import { mount as mountAvatar } from './screens/avatar.js';
 import { mount as mountPhotos } from './screens/photos.js';
 import { mount as mountCamera } from './screens/camera.js';
+import { mount as mountInsights } from './screens/insights.js';
+import { mount as mountWrapped } from './screens/wrapped.js';
+import { mount as mountBody } from './screens/body.js';
 import { icon } from './ui.js';
 import { enhanceTabbar } from './tabbar-dock.js';
 
@@ -46,6 +49,9 @@ const SCREENS = {
   achievements: { mount: mountAchievements },
   settings: { mount: mountSettings },
   avatar: { mount: mountAvatar },
+  insights: { mount: mountInsights },
+  wrapped: { mount: mountWrapped },
+  body: { mount: mountBody },
   photos: { mount: mountPhotos },
   'photos/compare': { mount: mountPhotos, mode: 'compare' },
   'photos/camera': { mount: mountCamera },

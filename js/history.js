@@ -304,6 +304,12 @@ export function completionIndex(data, today = todayKey()) {
   return idx;
 }
 
+/** Set of date keys where every active category was completed ("all" complete). */
+export function completedDaySet(data, today = todayKey()) {
+  const idx = completionIndex(data, today);
+  return new Set([...idx.entries()].filter(([, row]) => row.all === 'completed').map(([key]) => key));
+}
+
 /**
  * Current + best streak for one category, reusing the existing domain streak
  * semantics (calculateStreak with today-or-yesterday grace; no new algorithm).
@@ -336,8 +342,9 @@ export function computeStreaks(category, data, today = todayKey()) {
       break;
     case 'all':
     default: {
-      const idx = completionIndex(data, today);
-      days = [...idx.entries()].filter(([, row]) => row.all === 'completed').map(([key]) => key);
+      days = [...completedDaySet(data, today)];
+      // V1.8 streak freezes bridge missed days in the overall streak only.
+      if (Array.isArray(data.frozenDays)) days = [...new Set([...days, ...data.frozenDays])];
       break;
     }
   }
@@ -388,7 +395,9 @@ export async function loadHistoryData() {
     dbGetAll('workouts'),
     dbGetAll('journalEntries'),
   ]);
-  return { waterEntries, goals, workouts, journalEntries };
+  const { getSettings } = await import('./settings.js');
+  const frozenDays = getSettings().freeze?.frozenDays || [];
+  return { waterEntries, goals, workouts, journalEntries, frozenDays };
 }
 
 

@@ -87,8 +87,19 @@ export function makeGoal(data = {}) {
     completedDays: Array.isArray(data.completedDays)
       ? [...new Set(data.completedDays.filter((k) => typeof k === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(k)))]
       : [],
+    // V1.8 checklist steps: { id, text, doneDay } - doneDay is the date key it
+    // was ticked (daily goals reset each day; other types stay ticked).
+    subtasks: sanitizeSubtasks(data.subtasks),
     createdAt: data.createdAt || Date.now(),
   };
+}
+
+export function sanitizeSubtasks(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((t) => ({ id: t?.id || uid(), text: String(t?.text || '').trim().slice(0, 80), doneDay: typeof t?.doneDay === 'string' ? t.doneDay : null }))
+    .filter((t) => t.text)
+    .slice(0, 12);
 }
 
 export function validateGoal(data) {
@@ -299,6 +310,12 @@ export function defaultSettings() {
     name: '',
     theme: 'dark', // 'light' | 'dark' | 'system'
     accent: 'teal', // see ACCENTS
+    heightCm: null,
+    bodyUnit: 'kg', // 'kg' | 'lb' (Body screen display)
+    freeze: null, // streakFreeze state
+    lastBackupAt: null,
+    backupSnoozeUntil: null,
+    journalLock: null, // { salt, hash }
     backgroundImage: null, // { dataUrl, name }
     waterTarget: 3000, // ml per day
     waterUnit: 'ml', // 'ml' | 'L'
