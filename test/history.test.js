@@ -402,3 +402,26 @@ test('categoryHeader switches the title/tagline per view', () => {
   assert.equal(categoryHeader('goals').title, 'Goals History');
   assert.equal(categoryHeader('journal').tagline, 'Keep showing up for yourself.');
 });
+
+// ---- V1.7 visual layer: heatmap cells ----
+import { heatmapCells } from '../js/history.js';
+
+test('heatmapCells builds a 53-week Monday-aligned grid with levels and future flags', () => {
+  const today = '2026-03-18'; // Wednesday
+  const data = {
+    waterEntries: [],
+    goals: [],
+    workouts: [makeWorkout({ date: '2026-03-17' })],
+    journalEntries: [makeJournalEntry({ date: '2026-03-17' }), makeJournalEntry({ date: '2026-03-16' })],
+  };
+  const idx = completionIndex(data, today);
+  const cells = heatmapCells(idx, 'all', today);
+  assert.equal(cells.length, 53 * 7);
+  assert.equal(new Date(cells[0].key + 'T00:00:00').getDay(), 1); // starts Monday
+  const by = Object.fromEntries(cells.map((c) => [c.key, c]));
+  assert.equal(by['2026-03-17'].level, 2); // gym + journal
+  assert.equal(by['2026-03-16'].level, 1);
+  assert.equal(by['2026-03-19'].future, true);
+  assert.equal(by['2026-03-18'].future, false);
+  assert.equal(heatmapCells(idx, 'gym', today).find((c) => c.key === '2026-03-17').level, 4);
+});

@@ -298,6 +298,7 @@ export function defaultSettings() {
     onboarded: false,
     name: '',
     theme: 'dark', // 'light' | 'dark' | 'system'
+    accent: 'teal', // see ACCENTS
     backgroundImage: null, // { dataUrl, name }
     waterTarget: 3000, // ml per day
     waterUnit: 'ml', // 'ml' | 'L'
@@ -334,3 +335,10 @@ export function themeOptions() {
     { value: 'system', label: 'System' },
   ];
 }
+export const ACCENTS = [
+  { value: 'teal', label: 'Teal', color: '#2dd4bf' },
+  { value: 'ocean', label: 'Ocean', color: '#60a5fa' },
+  { value: 'sunset', label: 'Sunset', color: '#fb923c' },
+  { value: 'forest', label: 'Forest', color: '#4ade80' },
+  { value: 'violet', label: 'Violet', color: '#a78bfa' },
+];

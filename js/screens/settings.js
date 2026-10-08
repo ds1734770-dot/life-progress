@@ -8,7 +8,7 @@ import { getSettings, saveSettings, loadSettings, resetSettings } from '../setti
 import { ACHIEVEMENTS, loadAchievementRecords } from '../achievements.js';
 import * as photos from '../photos.js';
 import { dbExportAll, dbImportAll, dbResetAll } from '../db.js';
-import { themeOptions, WORKOUT_TYPES } from '../models.js';
+import { themeOptions, ACCENTS, WORKOUT_TYPES } from '../models.js';
 import { DEFAULT_LAUNCH_QUOTE, LAUNCH_QUOTE_MAX, launchQuote, sanitizeLaunchQuote, avatarMarkup, revokeAvatarUrls } from '../personalization.js';
 import { mountNotifications } from './notificationsSettings.js';
 import { mountNotificationAppearance } from './notificationAppearance.js';
@@ -93,6 +93,16 @@ function render(root, settings) {
           <div class="seg" style="flex:1;max-width:230px">
             ${themeOptions().map((opt) => `
               <button class="seg-item" data-action="theme" data-theme="${opt.value}" aria-selected="${settings.theme === opt.value}">${opt.label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="settings-row" style="flex-wrap:wrap;gap:12px">
+          <div class="settings-row-icon">${ui.icon('sparkles', 18)}</div>
+          <div class="settings-row-main">
+            <div class="settings-row-title">Accent colour</div>
+            <div class="settings-row-sub">Make the app yours</div>
+          </div>
+          <div class="accent-row">
+            ${ACCENTS.map((a) => `<button class="accent-swatch" data-action="accent" data-accent="${a.value}" aria-label="${a.label} accent" aria-pressed="${settings.accent === a.value}" style="background:${a.color}"></button>`).join('')}
           </div>
         </div>
       </div>
@@ -258,6 +268,11 @@ function render(root, settings) {
     'edit-quote': () => openQuoteEditor(root),
     theme: (d) => {
       saveSettings({ theme: d.theme });
+      ui.haptic();
+      render(root, getSettings());
+    },
+    accent: (d) => {
+      saveSettings({ accent: d.accent });
       ui.haptic();
       render(root, getSettings());
     },

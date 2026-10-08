@@ -149,3 +149,22 @@ test('avatarMarkup sizes scale the initials font', () => {
   assert.match(small, /font-size:1[78]px/);
   assert.match(large, /font-size:3[45]px/);
 });
+
+// ---- V1.7 mood series ----
+import { moodSeries } from '../js/journal.js';
+
+test('moodSeries averages moods per day and leaves gaps null', () => {
+  const entries = [
+    { date: '2026-03-18', mood: '😊' },
+    { date: '2026-03-18', mood: '😐' },
+    { date: '2026-03-16', mood: '😤' },
+    { date: '2026-03-17', mood: null },
+  ];
+  const s = moodSeries(entries, 4, '2026-03-18');
+  assert.equal(s.length, 4);
+  assert.deepEqual(s.map((p) => p.key), ['2026-03-15', '2026-03-16', '2026-03-17', '2026-03-18']);
+  assert.equal(s[0].score, null);
+  assert.equal(s[1].score, 1);
+  assert.equal(s[2].score, null);
+  assert.equal(s[3].score, 4);
+});

@@ -7,6 +7,7 @@ import { saveSettings } from '../settings.js';
 import * as water from '../water.js';
 import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
+import * as fx from '../fx.js';
 import { todayKey, formatWater, formatClock, formatDate } from '../utils.js';
 
 export async function mount(root, params) {
@@ -37,9 +38,10 @@ function render(root, entries) {
 
     <div class="card water-hero stagger">
       <div class="ring-wrap" id="water-ring-wrap">
+        ${fx.waveOrbMarkup()}
         ${ui.ringMarkup(136, 12)}
         <div class="ring-center">
-          <div id="water-total" style="font-size:26px;font-weight:800;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">0</div>
+          <div id="water-total" style="font-size:21px;font-weight:800;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">0</div>
           <div class="muted" style="font-size:11px;font-weight:600" id="water-pct">${displayPct}%</div>
         </div>
       </div>
@@ -136,6 +138,7 @@ function render(root, entries) {
   const dayBars = root.querySelectorAll('[data-daybar]');
   requestAnimationFrame(() => {
     ui.setRing(ringWrap, frac * 100);
+    fx.setWave(ringWrap, frac);
     if (totalNode) totalNode.textContent = formatWater(todayTotal, unit);
     if (pctNode) pctNode.textContent = `${displayPct}%`;
     dayBars.forEach((bar) => {
@@ -222,6 +225,7 @@ async function addAndRefresh(root, amount) {
   const today = todayKey();
   const todayTotal = water.totalOn(entries, today);
   const frac = todayTotal / target;
+  const justReached = frac >= 1 && (todayTotal - amount) / target < 1;
 
   // All DOM updates below are guarded: the screen may have been replaced by
   // navigation while the entry was being written (the node is gone then).
@@ -237,6 +241,8 @@ async function addAndRefresh(root, amount) {
       frac >= 1 ? 'Goal reached — well done' : `${formatWater(Math.max(0, target - todayTotal), unit)} remaining`;
   }
   ui.setRing(root.querySelector('#water-ring-wrap'), frac * 100);
+  fx.setWave(root.querySelector('#water-ring-wrap'), frac);
+  if (justReached) fx.confetti(root.querySelector('#water-ring-wrap'), { count: 120 });
 
   const todayBar = root.querySelector(`[data-daybar="${today}"]`);
   if (todayBar) {

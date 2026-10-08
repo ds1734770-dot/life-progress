@@ -100,6 +100,8 @@ export async function mount(root) {
       <div class="hist-grid" id="hist-grid"></div>
     </div>
 
+    <div class="card heat-card stagger" id="hist-heat-card"></div>
+
     <section class="section" id="hist-details-section" aria-label="Selected day details"></section>
   `;
 
@@ -112,6 +114,7 @@ export async function mount(root) {
       renderChips();
       renderStreakCard();
       renderGrid();
+      renderHeatmap();
       renderDetails();
     },
     'prev-month': () => shiftMonth(-1),
@@ -128,7 +131,11 @@ export async function mount(root) {
     'day-pick': (d) => {
       ui.haptic();
       state.selected = d.date;
-      renderGrid();
+      const m = history.monthOf(d.date);
+      state.year = m.year;
+      state.month = m.month;
+      renderMonth();
+      renderHeatmap();
       renderDetails();
     },
   });
@@ -136,6 +143,7 @@ export async function mount(root) {
   renderHeader();
   renderStreakCard();
   renderMonth();
+  renderHeatmap();
   renderDetails();
 
   // -------------------------------------------------------------------------
@@ -200,6 +208,41 @@ export async function mount(root) {
   /** Cell state for the active category (out-of-grid lookups are fine — the index covers all days). */
   function dayState(key, category = state.category) {
     return completionIndex().get(key)?.[category] || 'empty';
+  }
+
+  function renderHeatmap() {
+    const cells = history.heatmapCells(completionIndex(), state.category, today);
+    const active = cells.filter((c) => c.level > 0).length;
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const weeks = cells.length / 7;
+    let lastMonth = -1;
+    const labels = [];
+    for (let w = 0; w < weeks; w++) {
+      const m = Number(cells[w * 7].key.slice(5, 7)) - 1;
+      labels.push(m !== lastMonth && cells[w * 7].key.slice(8) <= '07' ? `<span>${monthNames[m]}</span>` : '<span></span>');
+      if (cells[w * 7].key.slice(8) <= '07') lastMonth = m;
+    }
+    const card = root.querySelector('#hist-heat-card');
+    const prev = card.querySelector('#heat-scroll');
+    const prevLeft = prev ? prev.scrollLeft : null;
+    card.innerHTML = `
+      <div class="flex-between" style="margin-bottom:10px">
+        <h3 class="section-title" style="font-size:var(--fs-lg)">Your year</h3>
+        <span class="pill pill-accent">${active} active day${active === 1 ? '' : 's'}</span>
+      </div>
+      <div class="heat-scroll" id="heat-scroll">
+        <div class="heat-months" aria-hidden="true">${labels.join('')}</div>
+        <div class="heat-grid" role="grid" aria-label="Activity over the past year">
+          ${cells.map((c) => `<button class="heat-cell l${c.level} ${c.future ? 'future' : ''} ${c.key === today ? 'today' : ''} ${c.key === state.selected ? 'selected' : ''}"
+            data-action="day-pick" data-date="${c.key}" tabindex="-1" aria-label="${formatDate(c.key, { short: true })}: ${c.level ? `level ${c.level} of 4` : 'no activity'}" title="${formatDate(c.key, { short: true })}"></button>`).join('')}
+        </div>
+      </div>
+      <div class="heat-foot">
+        <span>Tap a day to see details</span>
+        <span class="heat-legend">Less <i class="heat-cell"></i><i class="heat-cell l1"></i><i class="heat-cell l2"></i><i class="heat-cell l3"></i><i class="heat-cell l4"></i> More</span>
+      </div>`;
+    const sc = card.querySelector('#heat-scroll');
+    sc.scrollLeft = prevLeft === null ? sc.scrollWidth : prevLeft; // newest weeks in view on first paint
   }
 
   function renderMonth() {

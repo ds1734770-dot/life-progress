@@ -22,6 +22,47 @@ export async function mount(root, params, mode) {
   render(root, state);
 }
 
+/** 14-day mood line (SVG). Hidden until there are at least two mood days. */
+function moodChartMarkup(entries) {
+  const series = journal.moodSeries(entries, 14);
+  const pts = series.filter((p) => p.score !== null);
+  if (pts.length < 2) return '';
+  const W = 320, H = 110, padX = 16, top = 14, bottom = 24;
+  const x = (i) => padX + (i * (W - padX * 2)) / (series.length - 1);
+  const y = (score) => top + ((5 - score) / 4) * (H - top - bottom);
+  const coords = series.map((p, i) => (p.score === null ? null : [x(i), y(p.score)]));
+  const known = coords.filter(Boolean);
+  const line = known.map((c, i) => `${i ? 'L' : 'M'}${c[0].toFixed(1)} ${c[1].toFixed(1)}`).join(' ');
+  const area = `${line} L${known[known.length - 1][0].toFixed(1)} ${H - bottom} L${known[0][0].toFixed(1)} ${H - bottom} Z`;
+  const avg = pts.reduce((t, p) => t + p.score, 0) / pts.length;
+  const label = avg >= 4.3 ? 'Glowing lately ✨' : avg >= 3.5 ? 'Mostly good vibes' : avg >= 2.5 ? 'A steady stretch' : 'Be gentle with yourself 💛';
+  const axis = series
+    .map((p, i) => (i % 3 === 0 || i === series.length - 1 ? `<text class="mood-axis" x="${x(i).toFixed(1)}" y="${H - 6}">${Number(p.key.slice(8))}</text>` : ''))
+    .join('');
+  const dots = series
+    .map((p, i) => (p.emoji ? `<text class="mood-dot" x="${x(i).toFixed(1)}" y="${y(p.score).toFixed(1)}">${p.emoji}</text>` : ''))
+    .join('');
+  return `
+    <section class="section stagger">
+      <div class="card mood-card">
+        <div class="flex-between" style="margin-bottom:6px">
+          <h3 class="section-title" style="font-size:var(--fs-lg)">Mood · 14 days</h3>
+          <span class="pill pill-accent">${pts.length} logged</span>
+        </div>
+        <svg class="mood-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Mood over the last 14 days. ${label}">
+          <defs><linearGradient id="mood-grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity="0.35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+          <line class="mood-grid" x1="${padX}" x2="${W - padX}" y1="${y(5)}" y2="${y(5)}"/>
+          <line class="mood-grid" x1="${padX}" x2="${W - padX}" y1="${y(3)}" y2="${y(3)}"/>
+          <line class="mood-grid" x1="${padX}" x2="${W - padX}" y1="${y(1)}" y2="${y(1)}"/>
+          <path class="mood-area" d="${area}"/>
+          <path class="mood-line" d="${line}"/>
+          ${dots}${axis}
+        </svg>
+        <div class="mood-caption">${label}</div>
+      </div>
+    </section>`;
+}
+
 function render(root, state) {
   const stats = journal.journalStats(state.entries);
   const filtered = journal.searchEntries(state.entries, state.query);
@@ -42,6 +83,8 @@ function render(root, state) {
         <div class="stat"><div class="stat-value">${stats.thisMonth}</div><div class="stat-label">This month</div></div>
       </div>
     </section>
+
+    ${moodChartMarkup(state.entries)}
 
     <section class="section stagger">
       <div class="search-box">

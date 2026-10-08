@@ -15,7 +15,7 @@
  * UTC conversion. `today` is injectable for deterministic tests.
  */
 
-import { addDays, dateKey, todayKey, calculateStreak, calculateBestStreak } from './utils.js';
+import { addDays, dateKey, todayKey, calculateStreak, calculateBestStreak, startOfWeekKey } from './utils.js';
 import { isCompletedOn, inBucketOn, goalCompletionDays } from './goals.js';
 import { totalOn, metDays, waterTarget } from './water.js';
 
@@ -389,4 +389,32 @@ export async function loadHistoryData() {
     dbGetAll('journalEntries'),
   ]);
   return { waterEntries, goals, workouts, journalEntries };
+}
+
+
+/**
+ * Year heatmap cells (Monday-first columns, oldest → newest) for the visual
+ * "contribution graph". Level 0–4:
+ *   all      → number of categories completed that day (partial-only = 1)
+ *   category → completed = 4, partial = 2
+ * Cells after `today` are flagged `future` so the grid stays rectangular.
+ */
+export function heatmapCells(idx, category, today = todayKey(), weeks = 53) {
+  const start = addDays(startOfWeekKey(today), -(weeks - 1) * 7);
+  const cells = [];
+  for (let i = 0; i < weeks * 7; i++) {
+    const key = addDays(start, i);
+    const row = idx.get(key);
+    let level = 0;
+    if (row && key <= today) {
+      if (category === 'all') {
+        const done = ACTIVITY_TYPES.filter((c) => row[c] === 'completed').length;
+        level = done > 0 ? done : ACTIVITY_TYPES.some((c) => row[c] === 'partial') ? 1 : 0;
+      } else {
+        level = row[category] === 'completed' ? 4 : row[category] === 'partial' ? 2 : 0;
+      }
+    }
+    cells.push({ key, level, future: key > today });
+  }
+  return cells;
 }

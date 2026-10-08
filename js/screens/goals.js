@@ -7,6 +7,7 @@ import * as goals from '../goals.js';
 import { checkAchievementsNow } from '../celebration.js';
 import { GOAL_TYPES, GOAL_CATEGORIES, GOAL_PRIORITIES } from '../models.js';
 import * as ui from '../ui.js';
+import * as fx from '../fx.js';
 import { todayKey, formatDate, addDays, startOfWeekKey, formatMonth } from '../utils.js';
 
 const CATEGORY_PILL = {
@@ -113,6 +114,7 @@ function render(root, state) {
           const burst = ui.el('span', { class: 'burst-ring' });
           check.appendChild(burst);
           ui.pulse(check);
+          fx.confetti(check, { count: 50, power: 0.8 });
         }
         ui.toast('Goal completed', 'success');
       }

@@ -3,7 +3,7 @@
  */
 import { dbDelete, dbGet, dbGetAll, dbPut } from './db.js';
 import { makeJournalEntry } from './models.js';
-import { calculateStreak, todayKey } from './utils.js';
+import { addDays, calculateStreak, todayKey } from './utils.js';
 
 export async function getAllEntries() {
   return (await dbGetAll('journalEntries')).sort(
@@ -81,4 +81,33 @@ export function groupByDay(entries) {
 export function entryPreview(entry, max = 110) {
   const text = entry.content || entry.title;
   return text.length > max ? text.slice(0, max).trimEnd() + '…' : text;
+}
+/** Mood → 1 (low) … 5 (high) for charting. */
+export const MOOD_SCORES = { '🥳': 5, '😊': 5, '🙂': 4, '😐': 3, '😴': 2, '😔': 2, '😤': 1 };
+
+/**
+ * Daily mood series for the last `days` days (oldest first). A day's score is
+ * the average of its entries' moods; days without a mood have score null.
+ * `emoji` is the day's closest-to-average mood.
+ */
+export function moodSeries(entries, days = 14, today = todayKey()) {
+  const byDay = new Map();
+  for (const e of entries) {
+    if (!e.mood || !(e.mood in MOOD_SCORES)) continue;
+    if (!byDay.has(e.date)) byDay.set(e.date, []);
+    byDay.get(e.date).push(e.mood);
+  }
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const key = addDays(today, -i);
+    const moods = byDay.get(key);
+    if (!moods) {
+      out.push({ key, score: null, emoji: null });
+      continue;
+    }
+    const score = moods.reduce((t, m) => t + MOOD_SCORES[m], 0) / moods.length;
+    const emoji = moods.reduce((best, m) => (Math.abs(MOOD_SCORES[m] - score) < Math.abs(MOOD_SCORES[best] - score) ? m : best), moods[0]);
+    out.push({ key, score, emoji });
+  }
+  return out;
 }

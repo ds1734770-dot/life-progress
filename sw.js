@@ -10,7 +10,8 @@
 // every statically-importing page). Cache-first + an UNCHANGED cache name
 // would keep serving the poisoned files forever; the bump makes activate()
 // delete the stale cache and install() re-precache the corrected graph.
-const CACHE = 'life-progress-v1.18';
+// V1.19 — js/fx.js + css/fx.css (visual layer) join the precache.
+const CACHE = 'life-progress-v1.19';
 
 // V2.1 — the 12 built-in wallpaper files, mirrored from the registry in
 // js/notifyWallpapers.js (kept as a literal list here so the precache never
@@ -33,12 +34,14 @@ const CORE_ASSETS = [
   './css/base.css',
   './css/components.css',
   './css/screens.css',
+  './css/fx.css',
   './js/app.js',
   './js/utils.js',
   './js/models.js',
   './js/db.js',
   './js/settings.js',
   './js/ui.js',
+  './js/fx.js',
   './js/water.js',
   './js/goals.js',
   './js/gym.js',

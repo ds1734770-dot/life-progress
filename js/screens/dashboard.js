@@ -20,6 +20,7 @@ import * as photos from '../photos.js';
 import * as history from '../history.js';
 import { checkAchievementsNow } from '../celebration.js';
 import * as ui from '../ui.js';
+import * as fx from '../fx.js';
 import { go } from '../router.js';
 import {
   calculateDailyProgress,
@@ -110,7 +111,10 @@ export async function mount(root, params) {
       await goals.setGoalCompleted(goal, goal.status !== 'completed');
       checkAchievementsNow(); // V1.2: evaluate + celebrate (fire-and-forget)
       refreshSections(root, ['progress', 'goals']);
-      if (goal.status === 'completed') ui.toast('Goal completed', 'success');
+      if (goal.status === 'completed') {
+        ui.toast('Goal completed', 'success');
+        fx.confetti(root.querySelector(`.goal-check[data-id="${d.id}"]`) || undefined, { count: 50, power: 0.8 });
+      }
     },
     'open-goals': () => go('goals'),
     'open-water': () => go('water'),
@@ -218,24 +222,52 @@ function renderProgressCard(root, state) {
   parts.push(`Workout ${workoutDone ? '✓' : '—'}`);
   parts.push(`Journal ${journalDone ? '✓' : '—'}`);
 
+  const fractions = {
+    goals: todayGoals.length ? doneGoals / todayGoals.length : 0,
+    water: clamp(waterFrac, 0, 1),
+    gym: workoutDone ? 1 : 0,
+    journal: journalDone ? 1 : 0,
+  };
+  const streak = history.computeStreaks('all', state, today);
+  const perfect = pct >= 100;
+
   const node = root.querySelector('#card-progress');
   if (!node) return; // screen was replaced mid-render (navigation race)
   node.innerHTML = `
-    <div class="card dash-progress-card stagger">
-      <div class="ring-wrap">
-        ${ui.ringMarkup(132, 12)}
+    <div class="card dash-rings-card stagger ${perfect ? 'perfect' : ''}">
+      <div class="cr-wrap">
+        ${fx.concentricRingsMarkup(140)}
         <div class="ring-center">
-          <div id="dash-pct" style="font-size:34px;font-weight:800;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">0%</div>
-          <div class="muted" style="font-size:11px;font-weight:600">Today</div>
+          <div class="cr-pct" id="dash-pct">0%</div>
         </div>
       </div>
-      <div class="dash-progress-text grow">
-        <div class="dash-progress-label" style="font-size:17px;font-weight:700">Today's Progress</div>
-        <div class="dash-progress-sub">${ui.escapeHtml(parts.join(' · '))}</div>
+      <div class="cr-legend grow">
+        <div class="cr-title">${perfect ? 'Perfect day 🎉' : "Today's Progress"}</div>
+        ${fx.ringLegendMarkup(fractions)}
+        <div class="streak-chip ${streak.current > 0 ? '' : 'dead'}" style="margin-top:6px;align-self:flex-start">
+          ${fx.flameMarkup(streak.current, 22)}
+          ${streak.current > 0 ? `${streak.current} day streak` : 'Start a streak today'}
+        </div>
       </div>
     </div>`;
-  ui.setRing(node, pct);
+  fx.setConcentricRings(node, fractions);
   ui.animateCount(node.querySelector('#dash-pct'), pct, { format: (n) => `${Math.round(n)}%` });
+
+  // Perfect-day celebration — once per calendar day.
+  if (perfect) {
+    try {
+      const key = `perfect-day-${today}`;
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, '1');
+        setTimeout(() => {
+          fx.confetti(node.querySelector('.cr-wrap'), { count: 140, power: 1.2 });
+          ui.toast('Perfect day — every ring closed!', 'success');
+        }, 600);
+      }
+    } catch {
+      /* storage unavailable — skip the one-time celebration */
+    }
+  }
 }
 
 function renderHistoryCard(root, state) {

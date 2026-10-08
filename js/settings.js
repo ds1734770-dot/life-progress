@@ -2,7 +2,7 @@
  * App settings — single cached record plus theme handling.
  */
 import { dbGet, dbPut } from './db.js';
-import { defaultSettings, gymDefaults } from './models.js';
+import { defaultSettings, gymDefaults, ACCENTS } from './models.js';
 import { normalizeAvatar } from './personalization.js';
 
 let settings = null;
@@ -34,6 +34,7 @@ function withDefaults(stored) {
   if (typeof s.launchQuote !== 'string' || !s.launchQuote.trim()) {
     s.launchQuote = defaults.launchQuote;
   }
+  if (!ACCENTS.some((a) => a.value === s.accent)) s.accent = 'teal';
   s.avatar = normalizeAvatar(s.avatar);
   if (!(s.avatarImage instanceof Blob)) s.avatarImage = null;
   // --- V1.4 gym templates (rest timer) ---
@@ -75,6 +76,7 @@ export function applyTheme() {
   if (typeof document === 'undefined') return;
   const theme = resolvedTheme();
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.accent = getSettings().accent || 'teal';
   const meta = document.getElementById('meta-theme-color');
   if (meta) meta.setAttribute('content', theme === 'dark' ? '#0a0e14' : '#f4f6f9');
 }
